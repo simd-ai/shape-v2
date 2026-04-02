@@ -1,0 +1,15 @@
+# Ablation: structured grid vs adaptive queries
+tokenizer:
+  latent:
+    strategy: surface_adaptive_queries
+    adaptive_num_tokens: 2048
+    token_dim: 128
+  num_scales: 2
+
+processor:
+  hidden_size: 128
+  num_layers: 3
+
+train:
+  epochs: 30
+  batch_size: 64

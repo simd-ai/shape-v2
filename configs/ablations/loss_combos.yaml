@@ -1,0 +1,17 @@
+# Ablation: loss combinations
+# masked-only vs masked+contrastive vs masked+contrastive+inpainting
+# Toggle via overrides:
+#   train.loss.contrastive.enabled=false train.loss.inpainting.enabled=false  (masked only)
+#   train.loss.inpainting.enabled=false  (masked+contrastive)
+#   (defaults = masked+contrastive+inpainting)
+
+train:
+  epochs: 30
+  batch_size: 64
+  loss:
+    masked_token:
+      enabled: true
+    contrastive:
+      enabled: true
+    inpainting:
+      enabled: true

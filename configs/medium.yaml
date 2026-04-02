@@ -1,0 +1,47 @@
+# Medium config: recommended default experiment
+# Single GPU: python -m shape_foundation.scripts.train_pretrain --config configs/medium.yaml
+# Multi-GPU:  torchrun --nproc_per_node=8 -m shape_foundation.scripts.train_pretrain --config configs/medium.yaml
+input:
+  num_surface_points: 8192
+
+tokenizer:
+  latent:
+    latent_shape: [48, 48, 48]
+    token_dim: 256
+  neighbor:
+    multiscale_radii: [0.05, 0.1, 0.2]
+  agno:
+    num_heads: 4
+
+processor:
+  hidden_size: 256
+  num_layers: 6
+  num_heads: 8
+  num_kv_heads: 2
+  patch_size: 6
+
+heads:
+  embedding_dim: 256
+
+train:
+  epochs: 100
+  batch_size: 32
+  gradient_accumulation_steps: 2
+  mixed_precision: bf16
+  num_workers: 8
+  pin_memory: true
+  optimizer:
+    lr: 3.0e-4
+    warmup_steps: 1000
+
+data:
+  sources:
+    - name: abc
+      weight: 1.0
+    - name: shapenet
+      weight: 0.5
+    - name: objaverse
+      max_samples: 100000
+      weight: 0.3
+    - name: thingi10k
+      weight: 0.2

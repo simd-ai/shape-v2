@@ -1,0 +1,24 @@
+# Ablation: compare input modes
+# Run with each input.mode separately:
+#   vertices_only | surface_sampled_points | hybrid_vertices_plus_surface
+
+input:
+  mode: vertices_only
+  num_surface_points: 4096
+
+tokenizer:
+  latent:
+    latent_shape: [24, 24, 24]
+    token_dim: 128
+
+processor:
+  hidden_size: 128
+  num_layers: 3
+  num_heads: 4
+  num_kv_heads: 2
+
+train:
+  epochs: 30
+  batch_size: 64
+  optimizer:
+    warmup_steps: 300

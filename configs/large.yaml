@@ -1,0 +1,68 @@
+# Large config: full-scale training, multi-GPU (8xH100)
+# Launch: torchrun --nproc_per_node=8 -m shape_foundation.scripts.train_pretrain --config configs/large.yaml
+# Effective batch size: 16 * 8 GPUs * 8 accum = 1024
+input:
+  num_surface_points: 16384
+
+tokenizer:
+  latent:
+    latent_shape: [48, 48, 48]
+    token_dim: 512
+  neighbor:
+    multiscale_radii: [0.03, 0.06, 0.12, 0.24]
+  agno:
+    num_heads: 8
+  num_scales: 4
+
+processor:
+  hidden_size: 512
+  num_layers: 12
+  num_heads: 16
+  num_kv_heads: 4
+  patch_size: 6
+  uvit_skip: true
+
+heads:
+  embedding_dim: 512
+  symmetry:
+    hidden_dim: 512
+  primitive:
+    hidden_dim: 512
+  part:
+    hidden_dim: 512
+  caption:
+    hidden_dim: 512
+  reduction:
+    hidden_dim: 512
+
+train:
+  epochs: 200
+  batch_size: 16
+  gradient_accumulation_steps: 8
+  mixed_precision: bf16
+  compile_model: true
+  num_workers: 8
+  pin_memory: true
+  optimizer:
+    lr: 2.0e-4
+    warmup_steps: 2000
+
+data:
+  sources:
+    - name: abc
+      weight: 1.0
+    - name: shapenet
+      weight: 0.5
+    - name: objaverse
+      weight: 0.3
+    - name: objaverse_xl
+      max_samples: 500000
+      weight: 0.2
+    - name: thingi10k
+      weight: 0.2
+    - name: partnet
+      weight: 0.3
+    - name: fusion360
+      weight: 0.3
+    - name: mfcad
+      weight: 0.2

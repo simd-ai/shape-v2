@@ -1,0 +1,9 @@
+# Ablation: absolute vs RoPE positional embeddings
+processor:
+  positional_embedding: rope
+  hidden_size: 128
+  num_layers: 3
+
+train:
+  epochs: 30
+  batch_size: 64

@@ -1,0 +1,10 @@
+# Ablation: transformer layers 3, 6, 12
+# Override processor.num_layers from CLI
+
+processor:
+  num_layers: 3
+  hidden_size: 128
+
+train:
+  epochs: 30
+  batch_size: 64

@@ -1,0 +1,14 @@
+# Ablation: token dims 128, 256, 512
+# Override tokenizer.latent.token_dim and processor.hidden_size from CLI
+
+tokenizer:
+  latent:
+    token_dim: 128
+
+processor:
+  hidden_size: 128
+  num_layers: 3
+
+train:
+  epochs: 30
+  batch_size: 64

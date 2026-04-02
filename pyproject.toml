@@ -1,0 +1,46 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "shape-foundation"
+version = "0.1.0"
+description = "3D geometry foundation model for simulation-relevant mesh analysis"
+readme = "README.md"
+requires-python = ">=3.10"
+license = {text = "MIT"}
+
+dependencies = [
+    "torch>=2.2",
+    "torch-geometric>=2.5",
+    "torch-cluster>=1.6",
+    "torch-scatter>=2.1",
+    "numpy>=1.24",
+    "trimesh>=4.0",
+    "pyyaml>=6.0",
+    "tqdm>=4.66",
+    "tensorboard>=2.15",
+    "einops>=0.7",
+    "meshio>=5.3",
+    "scipy>=1.11",
+]
+
+[project.optional-dependencies]
+datasets = [
+    "huggingface-hub>=0.20",
+    "objaverse>=0.1",
+]
+dev = [
+    "pytest>=7.4",
+    "ruff>=0.3",
+]
+
+[project.scripts]
+shape-prepare = "shape_foundation.scripts.prepare_dataset:main"
+shape-train = "shape_foundation.scripts.train_pretrain:main"
+shape-finetune = "shape_foundation.scripts.train_finetune:main"
+shape-eval = "shape_foundation.scripts.eval_backbone:main"
+shape-infer = "shape_foundation.scripts.infer_mesh:main"
+
+[tool.setuptools.packages.find]
+include = ["shape_foundation*"]

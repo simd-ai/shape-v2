@@ -1,0 +1,46 @@
+# Small config: fast experiments, single GPU
+input:
+  num_surface_points: 4096
+
+tokenizer:
+  latent:
+    latent_shape: [24, 24, 24]
+    token_dim: 128
+  neighbor:
+    multiscale_radii: [0.05, 0.1, 0.2]
+  agno:
+    num_heads: 4
+
+processor:
+  hidden_size: 128
+  num_layers: 3
+  num_heads: 4
+  num_kv_heads: 2
+  patch_size: 6
+
+heads:
+  embedding_dim: 128
+  symmetry:
+    hidden_dim: 128
+  primitive:
+    hidden_dim: 128
+  part:
+    hidden_dim: 128
+  caption:
+    hidden_dim: 128
+  reduction:
+    hidden_dim: 128
+
+train:
+  epochs: 50
+  batch_size: 64
+  optimizer:
+    lr: 3.0e-4
+    warmup_steps: 500
+
+data:
+  sources:
+    - name: abc
+      weight: 1.0
+    - name: shapenet
+      weight: 0.5

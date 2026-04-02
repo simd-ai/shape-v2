@@ -1,0 +1,53 @@
+# Smoke-test config: tiny model, minimal data, fast iteration
+input:
+  num_surface_points: 512
+
+tokenizer:
+  latent:
+    latent_shape: [8, 8, 8]
+    token_dim: 64
+  neighbor:
+    multiscale_radii: [0.1, 0.2]
+  agno:
+    num_heads: 2
+  num_scales: 2
+
+processor:
+  hidden_size: 64
+  num_layers: 2
+  num_heads: 2
+  num_kv_heads: 1
+  patch_size: 4
+
+heads:
+  embedding_dim: 64
+  symmetry:
+    hidden_dim: 64
+  primitive:
+    hidden_dim: 64
+  part:
+    hidden_dim: 64
+  caption:
+    hidden_dim: 64
+  reduction:
+    hidden_dim: 64
+
+train:
+  epochs: 2
+  batch_size: 4
+  eval_every: 10
+  save_every: 50
+  log_every: 5
+  num_workers: 0
+  mixed_precision: fp32
+  optimizer:
+    lr: 1.0e-3
+    warmup_steps: 10
+
+data:
+  cache_dir: data_cache
+  sources:
+    - name: synthetic
+      root: data_cache/synthetic
+      split: all
+      max_samples: 64
