@@ -38,10 +38,10 @@ data:
   sources:
     - name: abc
       weight: 1.0
-    - name: shapenet
-      weight: 0.5
     - name: objaverse
       max_samples: 100000
       weight: 0.3
     - name: thingi10k
       weight: 0.2
+    # - name: shapenet  # requires access approval — re-enable when available
+    #   weight: 0.5

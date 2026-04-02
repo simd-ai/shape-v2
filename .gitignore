@@ -9,6 +9,7 @@ build/
 checkpoints/
 runs/
 data_cache/
+data_raw/
 *.pt
 !shape_foundation/**/*.py
 

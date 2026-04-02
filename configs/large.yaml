@@ -51,8 +51,6 @@ data:
   sources:
     - name: abc
       weight: 1.0
-    - name: shapenet
-      weight: 0.5
     - name: objaverse
       weight: 0.3
     - name: objaverse_xl

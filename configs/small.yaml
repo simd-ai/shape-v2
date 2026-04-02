@@ -42,5 +42,7 @@ data:
   sources:
     - name: abc
       weight: 1.0
-    - name: shapenet
+    - name: thingi10k
       weight: 0.5
+    # - name: shapenet  # requires access approval — re-enable when available
+    #   weight: 0.5
