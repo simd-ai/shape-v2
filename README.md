@@ -13,37 +13,71 @@
 ## Quick Start
 
 ```bash
-# Install
+# Install (tested on CUDA 12.8+ / V100/H100)
 pip install torch --index-url https://download.pytorch.org/whl/cu124
 pip install -e .
 
-# Generate synthetic training data
-python -m shape_foundation.scripts.prepare_dataset --generate-synthetic --n-per-type 500
-
-# Smoke test (tiny model, 2 epochs)
-python -m shape_foundation.scripts.train_pretrain --config configs/smoke_test.yaml --dry-run
-python -m shape_foundation.scripts.train_pretrain --config configs/smoke_test.yaml
-
-# Inference
-python -m shape_foundation.scripts.infer_mesh --checkpoint checkpoints/checkpoint_final.pt --mesh path/to/mesh.stl --verbose
+# Also install aria2 for fast parallel downloads
+sudo apt-get install -y aria2 p7zip-full
 ```
 
-## Training
-
-### Stage 1: Self-Supervised Pretraining
-
-Train on ABC + ShapeNet + Objaverse + Thingi10K with masked token modeling, multi-resolution contrastive learning, and partial inpainting.
+## Step 1: Download Datasets
 
 ```bash
-# Prepare real datasets (requires downloading to data_cache/<name>/)
-python -m shape_foundation.scripts.prepare_dataset --source abc --root /data/abc --output data_cache/abc
-python -m shape_foundation.scripts.prepare_dataset --source shapenet --root /data/ShapeNet --output data_cache/shapenet
+# Download datasets — choose a config size:
+#   small  = abc, thingi10k
+#   medium = abc, objaverse, thingi10k
+#   large  = abc, objaverse, objaverse_xl, thingi10k, partnet, fusion360, mfcad
+./scripts/download_datasets.sh small
 
-# Single GPU — medium config (recommended default)
-python -m shape_foundation.scripts.train_pretrain --config configs/medium.yaml
+# Download more ABC chunks (default is 5, max 100, ~10k meshes each):
+ABC_CHUNKS=20 ./scripts/download_datasets.sh small
 
-# Multi-GPU DDP
-torchrun --nproc_per_node=4 -m shape_foundation.scripts.train_pretrain --config configs/large.yaml
+# aria2c uses 16 parallel connections per file, chunks download simultaneously.
+# Downloads are resumable — re-run the same command if interrupted.
+# Raw data goes to data_raw/<dataset_name>/
+```
+
+## Step 2: Extract Archives
+
+```bash
+# Extract ABC 7z archives (if not auto-extracted by download script)
+for f in data_raw/abc/abc_*_obj_v00.7z; do 7z x -odata_raw/abc "$f" -y; done
+```
+
+## Step 3: Preprocess into .pt Files
+
+```bash
+# Preprocess a specific dataset
+python -m shape_foundation.scripts.prepare_dataset --source abc --root data_raw/abc --output data_cache/abc
+
+# Preprocess thingi10k
+python -m shape_foundation.scripts.prepare_dataset --source thingi10k --root data_raw/thingi10k --output data_cache/thingi10k
+
+# Or generate synthetic data (no download needed)
+python -m shape_foundation.scripts.prepare_dataset --generate-synthetic --n-per-type 500
+
+# Limit samples for faster testing
+python -m shape_foundation.scripts.prepare_dataset --source abc --root data_raw/abc --output data_cache/abc --max-samples 1000
+```
+
+## Step 4: Train (Pretrain)
+
+```bash
+# Smoke test (tiny model, verifies setup)
+python -m shape_foundation.scripts.train_pretrain --config configs/smoke_test.yaml
+
+# Single GPU — small config
+python -m shape_foundation.scripts.train_pretrain --config configs/small.yaml
+
+# Multi-GPU DDP — 8x V100
+torchrun --nproc_per_node=8 -m shape_foundation.scripts.train_pretrain --config configs/small.yaml
+
+# Multi-GPU DDP — medium config (recommended)
+torchrun --nproc_per_node=8 -m shape_foundation.scripts.train_pretrain --config configs/medium.yaml
+
+# Multi-GPU DDP — large config
+torchrun --nproc_per_node=8 -m shape_foundation.scripts.train_pretrain --config configs/large.yaml
 
 # Override specific settings
 python -m shape_foundation.scripts.train_pretrain --config configs/medium.yaml --epochs 50 --batch-size 64 --lr 1e-4
@@ -186,11 +220,56 @@ python -m shape_foundation.scripts.train_pretrain --config configs/ablations/los
 | `medium.yaml` | 48³ | 256 | 6 | 8 | 6 | **Recommended default** |
 | `large.yaml` | 48³ | 512 | 12 | 16 | 6 | Multi-GPU full training |
 
+## Cloud Storage (GCS)
+
+Save and restore data across instances using Google Cloud Storage.
+
+```bash
+# --- Setup (one-time) ---
+gcloud auth login
+gcloud config set project YOUR_PROJECT_ID
+gcloud storage buckets create gs://shape-foundation-data --location=us-central1
+
+# --- Upload to GCS ---
+# Raw datasets (~1TB+)
+gsutil -m rsync -r data_raw/ gs://shape-foundation-data/data_raw/
+# Preprocessed .pt files
+gsutil -m rsync -r data_cache/ gs://shape-foundation-data/data_cache/
+# Checkpoints
+gsutil -m rsync -r checkpoints/ gs://shape-foundation-data/checkpoints/
+
+# --- Download from GCS (on a new instance) ---
+gcloud auth login
+gcloud config set project YOUR_PROJECT_ID
+gsutil -m rsync -r gs://shape-foundation-data/data_raw/ data_raw/
+gsutil -m rsync -r gs://shape-foundation-data/data_cache/ data_cache/
+gsutil -m rsync -r gs://shape-foundation-data/checkpoints/ checkpoints/
+
+# Then resume training
+pip install -e .
+torchrun --nproc_per_node=8 -m shape_foundation.scripts.train_pretrain --config configs/small.yaml
+```
+
+Notes:
+- `gsutil -m rsync` uses parallel transfers and only syncs new/changed files (resumable).
+- To skip raw data and only sync preprocessed files: just sync `data_cache/` and `checkpoints/`.
+
 ## Datasets
+
+| Dataset | Download Method | Status |
+|---------|----------------|--------|
+| ABC | `./scripts/download_datasets.sh` (auto) | Available |
+| Thingi10K | `./scripts/download_datasets.sh` (auto) | Available |
+| Objaverse | `./scripts/download_datasets.sh` (auto, via Python) | Available |
+| Objaverse XL | `./scripts/download_datasets.sh` (auto, via Python) | Available |
+| ShapeNet | Manual — requires shapenet.org / HuggingFace access | Pending approval |
+| PartNet | Manual — requires Stanford access | Manual |
+| Fusion360 | `./scripts/download_datasets.sh` (semi-auto) | Available |
+| MFCAD++ | `./scripts/download_datasets.sh` (auto) | Available |
 
 | Stage | Datasets | Purpose |
 |-------|----------|---------|
-| 1 | ABC, ShapeNet, Objaverse, Thingi10K | Broad geometry diversity |
+| 1 | ABC, Objaverse, Thingi10K | Broad geometry diversity |
 | 2 | + PartNet, Fusion360, MFCAD++ | Engineering parts, topology |
 | 3 | + SHREC 2022/2023, Scan2CAD | Symmetry/primitive supervision |
 | 4 | + Custom/synthetic | CFD reduction labels |
