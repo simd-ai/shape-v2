@@ -42,18 +42,29 @@ download_abc() {
         echo "[abc] Already downloaded, skipping."
         return
     fi
-    echo "[abc] Downloading ABC dataset chunks in parallel..."
+    echo "[abc] Downloading ABC dataset (A Big CAD Model Dataset)..."
     mkdir -p "$dest"
-    # ABC dataset is hosted at NYU. Each chunk is a 7z archive (~8GB).
-    # Download first 5 chunks for a good training set. Adjust as needed.
+    # ABC dataset from https://deep-geometry.github.io/abc-dataset/
+    # Download the URL index, then fetch OBJ chunks in parallel
+    local URL_INDEX="$dest/obj_v00.txt"
+    if [ ! -f "$URL_INDEX" ]; then
+        echo "  [abc] Fetching chunk URL index..."
+        download_file "https://deep-geometry.github.io/abc-dataset/data/obj_v00.txt" "$URL_INDEX"
+    fi
+    local NUM_CHUNKS="${ABC_CHUNKS:-5}"  # default 5 chunks, override with ABC_CHUNKS=100
     local pids=()
     local chunks_to_download=()
     local logdir
     logdir=$(mktemp -d)
 
-    for chunk in 0000 0001 0002 0003 0004; do
-        local url="https://archive.nyu.edu/rest/bitstreams/8${chunk}/retrieve"
-        local archive="$dest/abc_${chunk}.7z"
+    local line_num=0
+    while IFS=' ' read -r url filename; do
+        [ -z "$url" ] && continue
+        line_num=$((line_num + 1))
+        [ "$line_num" -gt "$NUM_CHUNKS" ] && break
+        local chunk
+        chunk=$(printf "%04d" "$((line_num - 1))")
+        local archive="$dest/${filename}"
         if [ -f "$archive" ]; then
             echo "  [abc] Chunk $chunk already downloaded."
             continue
@@ -64,12 +75,11 @@ download_abc() {
             echo "FAILED" > "$logdir/$chunk.log"
         ) &
         pids+=($!)
-    done
+    done < "$URL_INDEX"
 
     # Show live progress table for all parallel downloads
     if [ ${#pids[@]} -gt 0 ]; then
         local n_chunks=${#chunks_to_download[@]}
-        # Print header
         echo ""
         echo "  ┌────────────┬────────────┬────────────┐"
         echo "  │ Chunk      │ Downloaded │ Status     │"
@@ -88,12 +98,11 @@ download_abc() {
                 fi
             done
 
-            # Move cursor up to overwrite the table rows + bottom border
             printf "\033[%dA" "$((n_chunks + 1))"
 
             for i in "${!chunks_to_download[@]}"; do
                 local chunk="${chunks_to_download[$i]}"
-                local archive="$dest/abc_${chunk}.7z"
+                local archive="$dest/abc_${chunk}_obj_v00.7z"
                 local size="---"
                 local status="waiting"
                 if [ -f "$archive" ]; then
@@ -129,19 +138,22 @@ download_abc() {
     rm -rf "$logdir"
     if [ "$failed" -gt 0 ]; then
         echo "  [abc] WARNING: $failed chunk(s) failed to download."
+        echo "  [abc] If URLs failed, the ABC dataset may need manual download from:"
+        echo "  [abc] https://deep-geometry.github.io/abc-dataset/"
+        echo "  [abc] Download the OBJ chunks and place them in: $dest"
     else
         echo "  [abc] All chunks downloaded."
     fi
     # Extract
     if command -v 7z &>/dev/null; then
-        for f in "$dest"/abc_*.7z; do
+        for f in "$dest"/abc_*_obj_v00.7z; do
             [ -f "$f" ] || continue
             echo "  [abc] Extracting $(basename "$f")..."
             7z x -o"$dest" "$f" -y > /dev/null
         done
     else
         echo "  [abc] Install p7zip to extract: sudo apt-get install p7zip-full"
-        echo "  [abc] Then run: for f in $dest/abc_*.7z; do 7z x -o\"$dest\" \"\$f\"; done"
+        echo "  [abc] Then run: for f in $dest/abc_*_obj.7z; do 7z x -o\"$dest\" \"\$f\"; done"
     fi
 }
 
