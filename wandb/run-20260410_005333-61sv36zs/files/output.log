@@ -1,0 +1,87 @@
+Model: 10,913,297 params (10,913,297 trainable)
+Device: cuda:0  AMP: bf16  DDP: True
+  GPU 0: NVIDIA H100 80GB HBM3 (85 GB)
+  GPU 1: NVIDIA H100 80GB HBM3 (85 GB)
+  GPU 2: NVIDIA H100 80GB HBM3 (85 GB)
+  GPU 3: NVIDIA H100 80GB HBM3 (85 GB)
+  GPU 4: NVIDIA H100 80GB HBM3 (85 GB)
+  GPU 5: NVIDIA H100 80GB HBM3 (85 GB)
+  GPU 6: NVIDIA H100 80GB HBM3 (85 GB)
+  GPU 7: NVIDIA H100 80GB HBM3 (85 GB)
+Training: 477 batches/epoch, 50 epochs
+DDP: 8 processes
+Epoch 0: 100%|███████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████| 477/477 [07:11<00:00,  1.11it/s, loss=1150.9662]
+Epoch 0: masked_token=22623.0738, contrastive=1.8488, inpainting=32842.2957, symmetry=1.0272, reduction=1.4042, total=39047.0218
+Epoch 1: 100%|███████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████| 477/477 [07:08<00:00,  1.11it/s, loss=4145.6221]
+Epoch 1: masked_token=13296.5808, contrastive=1.2499, inpainting=21883.5674, symmetry=0.9066, reduction=1.2891, total=24240.8092
+Epoch 2: 100%|█████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████| 477/477 [07:07<00:00,  1.12it/s, loss=873674.0000]
+Epoch 2: masked_token=11653.1661, contrastive=0.2189, inpainting=16571.6853, symmetry=0.8004, reduction=1.1929, total=19941.0457
+Epoch 3: 100%|████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████| 477/477 [07:07<00:00,  1.12it/s, loss=295.7190]
+Epoch 3: masked_token=14761.9552, contrastive=0.1676, inpainting=19521.2954, symmetry=0.7717, reduction=1.1596, total=24524.5678
+Epoch 4: 100%|████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████| 477/477 [07:07<00:00,  1.12it/s, loss=702.6893]
+Epoch 4: masked_token=24180.8691, contrastive=0.1643, inpainting=27564.3959, symmetry=0.8080, reduction=1.1877, total=37965.0954
+Epoch 5: 100%|████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████| 477/477 [07:08<00:00,  1.11it/s, loss=648.0427]
+Epoch 5: masked_token=18021.2562, contrastive=0.2718, inpainting=31269.5506, symmetry=0.8556, reduction=1.2195, total=33658.1613
+Epoch 6: 100%|█████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████| 477/477 [07:07<00:00,  1.12it/s, loss=273725.9062]
+Epoch 6: masked_token=11648.2666, contrastive=0.7585, inpainting=17370.8443, symmetry=0.9650, reduction=1.2802, total=20336.0851
+Epoch 7: 100%|████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████| 477/477 [07:09<00:00,  1.11it/s, loss=134.4978]
+Epoch 7: masked_token=5651.9154, contrastive=0.6578, inpainting=7381.4608, symmetry=0.9654, reduction=1.2872, total=9345.0303
+Epoch 8:  40%|██████████████████████████████████████████████████                                                                           | 191/477 [02:54<04:20,  1.10it/s, loss=85.3994]
+Traceback (most recent call last):
+  File "/home/nvidia/shape-v2/venv/lib/python3.12/site-packages/torch/serialization.py", line 944, in save
+    _save(
+  File "/home/nvidia/shape-v2/venv/lib/python3.12/site-packages/torch/serialization.py", line 1216, in _save
+    zip_file.write_record(name, storage, num_bytes)
+RuntimeError: [enforce fail at inline_container.cc:815] . PytorchStreamWriter failed writing file data/79: file write failed
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "<frozen runpy>", line 198, in _run_module_as_main
+  File "<frozen runpy>", line 88, in _run_code
+  File "/home/nvidia/shape-v2/shape_foundation/scripts/train_pretrain.py", line 161, in <module>
+    main()
+  File "/home/nvidia/shape-v2/shape_foundation/scripts/train_pretrain.py", line 151, in main
+    trainer.train()
+  File "/home/nvidia/shape-v2/shape_foundation/training/trainer.py", line 549, in train
+    train_metrics = self.train_epoch(train_loader, epoch)
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/nvidia/shape-v2/shape_foundation/training/trainer.py", line 478, in train_epoch
+    self._save_checkpoint(epoch)
+  File "/home/nvidia/shape-v2/shape_foundation/training/trainer.py", line 571, in _save_checkpoint
+    torch.save({
+  File "/home/nvidia/shape-v2/venv/lib/python3.12/site-packages/torch/serialization.py", line 943, in save
+    with _open_zipfile_writer(f) as opened_zipfile:
+         ^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/nvidia/shape-v2/venv/lib/python3.12/site-packages/torch/serialization.py", line 784, in __exit__
+    self.file_like.write_end_of_file()
+RuntimeError: [enforce fail at inline_container.cc:626] . unexpected pos 124032768 vs 124032656
+[rank0]: Traceback (most recent call last):
+[rank0]:   File "/home/nvidia/shape-v2/venv/lib/python3.12/site-packages/torch/serialization.py", line 944, in save
+[rank0]:     _save(
+[rank0]:   File "/home/nvidia/shape-v2/venv/lib/python3.12/site-packages/torch/serialization.py", line 1216, in _save
+[rank0]:     zip_file.write_record(name, storage, num_bytes)
+[rank0]: RuntimeError: [enforce fail at inline_container.cc:815] . PytorchStreamWriter failed writing file data/79: file write failed
+
+[rank0]: During handling of the above exception, another exception occurred:
+
+[rank0]: Traceback (most recent call last):
+[rank0]:   File "<frozen runpy>", line 198, in _run_module_as_main
+[rank0]:   File "<frozen runpy>", line 88, in _run_code
+[rank0]:   File "/home/nvidia/shape-v2/shape_foundation/scripts/train_pretrain.py", line 161, in <module>
+[rank0]:     main()
+[rank0]:   File "/home/nvidia/shape-v2/shape_foundation/scripts/train_pretrain.py", line 151, in main
+[rank0]:     trainer.train()
+[rank0]:   File "/home/nvidia/shape-v2/shape_foundation/training/trainer.py", line 549, in train
+[rank0]:     train_metrics = self.train_epoch(train_loader, epoch)
+[rank0]:                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank0]:   File "/home/nvidia/shape-v2/shape_foundation/training/trainer.py", line 478, in train_epoch
+[rank0]:     self._save_checkpoint(epoch)
+[rank0]:   File "/home/nvidia/shape-v2/shape_foundation/training/trainer.py", line 571, in _save_checkpoint
+[rank0]:     torch.save({
+[rank0]:   File "/home/nvidia/shape-v2/venv/lib/python3.12/site-packages/torch/serialization.py", line 943, in save
+[rank0]:     with _open_zipfile_writer(f) as opened_zipfile:
+[rank0]:          ^^^^^^^^^^^^^^^^^^^^^^^
+[rank0]:   File "/home/nvidia/shape-v2/venv/lib/python3.12/site-packages/torch/serialization.py", line 784, in __exit__
+[rank0]:     self.file_like.write_end_of_file()
+[rank0]: RuntimeError: [enforce fail at inline_container.cc:626] . unexpected pos 124032768 vs 124032656

@@ -1,0 +1,86 @@
+# 300M config: scaled model for 8xH100
+# Launch: torchrun --nproc_per_node=8 -m shape_foundation.scripts.train_pretrain --config configs/medium_300m.yaml
+# Effective batch size: 8 * 8 GPUs * 4 accum = 256
+input:
+  num_surface_points: 16384
+
+tokenizer:
+  latent:
+    latent_shape: [48, 48, 48]
+    token_dim: 512
+  neighbor:
+    multiscale_radii: [0.05, 0.1, 0.2]
+  agno:
+    num_heads: 8
+  geo_embed:
+    return_raw_stats: true
+  token_pos_encoding: true
+
+processor:
+  hidden_size: 768
+  num_layers: 12
+  num_heads: 12
+  num_kv_heads: 4
+  patch_size: 6
+  positional_embedding: absolute
+  uvit_skip: false
+  mask_patch_threshold: 0.5
+
+heads:
+  embedding_dim: 512
+  pooling: attention
+  symmetry:
+    hidden_dim: 512
+  primitive:
+    hidden_dim: 512
+  part:
+    hidden_dim: 512
+  caption:
+    hidden_dim: 512
+  reduction:
+    hidden_dim: 512
+
+train:
+  epochs: 100
+  batch_size: 8
+  gradient_accumulation_steps: 4
+  mixed_precision: bf16
+  num_workers: 4
+  pin_memory: true
+  optimizer:
+    lr: 2.0e-4
+    warmup_steps: 2000
+  loss:
+    masked_token:
+      mask_ratio: 0.25
+      mask_strategy: spatial_3d
+    weights:
+      masked_token: 1.0
+      contrastive: 0.2
+      inpainting: 0.5
+      symmetry: 1.0
+      primitive: 1.0
+      part: 1.0
+      reduction: 1.0
+  wandb:
+    enabled: true
+    project: shape-foundation
+    tags: [300m, pretrain, v1-fix]
+
+data:
+  sources:
+    - name: thingi10k
+      root: data_cache_16k/thingi10k/thingi10k
+      weight: 1.0
+    - name: mfcad
+      root: data_cache_16k/mfcad/mfcad
+      weight: 1.0
+    - name: fusion360
+      root: data_cache_16k/fusion360/fusion360
+      weight: 0.5
+    - name: objaverse
+      root: data_cache_16k/objaverse/objaverse
+      weight: 0.3
+    - name: partnet
+      root: data_cache_16k/partnet/partnet
+      weight: 0.3

@@ -7,6 +7,8 @@ import time
 from pathlib import Path
 from typing import Any
 
+import dataclasses as dc
+
 import torch
 import torch.nn as nn
 import torch.distributed as dist
@@ -41,28 +43,30 @@ class Trainer:
         self.is_main = self._is_main_process()
         self.use_cuda = self.device.type == "cuda"
 
-        # Model
-        self.model = GAOTBackbone(cfg).to(self.device)
-        if self.tcfg.compile_model and self.use_cuda:
-            self.model = torch.compile(self.model)
+        # Model: DDP first, compile second (PyTorch recommended order)
+        base_model = GAOTBackbone(cfg).to(self.device)
 
-        # DDP — use find_unused_parameters=False for speed; the architecture
-        # should not have unused params in the default forward path.
         if dist.is_initialized():
-            self.model = DDP(
-                self.model,
+            base_model = DDP(
+                base_model,
                 device_ids=[self.device.index] if self.use_cuda else None,
                 output_device=self.device.index if self.use_cuda else None,
-                find_unused_parameters=False,
-                gradient_as_bucket_view=True,  # saves memory on multi-GPU
+                find_unused_parameters=True,
+                gradient_as_bucket_view=True,
             )
+
+        if self.tcfg.compile_model and self.use_cuda:
+            base_model = torch.compile(base_model)
+
+        self.model = base_model
         self.raw_model = self.model.module if isinstance(self.model, DDP) else self.model
 
-        # Losses
+        # Losses — build recon_proj eagerly so its params exist before optimizer
         self.loss_computer = LossComputer(self.tcfg.loss).to(self.device)
         self.loss_computer.set_grid_shape(cfg.tokenizer.latent.latent_shape)
+        self._init_recon_proj(cfg)
 
-        # Optimizer
+        # Optimizer (must come after recon_proj is built)
         self.optimizer = self._build_optimizer()
         self.scheduler = self._build_scheduler()
 
@@ -85,10 +89,29 @@ class Trainer:
 
         # Logging
         self.writer = None
+        self.wandb_run = None
         if self.is_main:
             log_dir = Path(self.tcfg.log_dir)
             log_dir.mkdir(parents=True, exist_ok=True)
             self.writer = SummaryWriter(log_dir=str(log_dir))
+
+            # Weights & Biases
+            if self.tcfg.wandb.enabled:
+                try:
+                    import wandb
+                    wcfg = self.tcfg.wandb
+                    self.wandb_run = wandb.init(
+                        project=wcfg.project,
+                        entity=wcfg.entity or None,
+                        name=wcfg.name or None,
+                        tags=wcfg.tags or None,
+                        config=dc.asdict(cfg),
+                        resume="allow",
+                    )
+                except ImportError:
+                    print("Warning: wandb not installed, skipping W&B logging. pip install wandb")
+                except Exception as e:
+                    print(f"Warning: wandb init failed: {e}")
 
         # Checkpointing
         self.ckpt_dir = Path(self.tcfg.checkpoint_dir)
@@ -109,6 +132,21 @@ class Trainer:
                     mem = torch.cuda.get_device_properties(i).total_memory / 1e9
                     print(f"  GPU {i}: {torch.cuda.get_device_name(i)} ({mem:.0f} GB)")
 
+    def _init_recon_proj(self, cfg: ShapeConfig) -> None:
+        """Eagerly build the reconstruction projection so its params are
+        available to the optimizer. Must be called before _build_optimizer."""
+        if cfg.train.loss.masked_token.enabled or cfg.train.loss.inpainting.enabled:
+            token_dim = cfg.tokenizer.latent.token_dim
+            # Compute raw_geo_stats dim from config
+            geo = cfg.tokenizer.geo_embed
+            n_stats = len(geo.stat_features)
+            target_dim = n_stats * 3  # base: relative positions are 3D
+            if geo.augment_normals:
+                target_dim += n_stats * 3
+            if geo.augment_curvature:
+                target_dim += n_stats * 1
+            self.loss_computer._ensure_recon_proj(token_dim, target_dim, self.device)
+
     def _setup_device(self) -> torch.device:
         if torch.cuda.is_available():
             local_rank = int(os.environ.get("LOCAL_RANK", 0))
@@ -125,15 +163,18 @@ class Trainer:
     def _build_optimizer(self) -> torch.optim.Optimizer:
         ocfg = self.tcfg.optimizer
         # separate weight decay: no decay for biases, norms, embeddings
+        # include both model and loss_computer (recon_proj) parameters
         decay_params = []
         no_decay_params = []
-        for name, param in self.model.named_parameters():
-            if not param.requires_grad:
-                continue
-            if "bias" in name or "norm" in name or "embed" in name:
-                no_decay_params.append(param)
-            else:
-                decay_params.append(param)
+        all_modules = [("model", self.model), ("loss_computer", self.loss_computer)]
+        for module_name, module in all_modules:
+            for name, param in module.named_parameters():
+                if not param.requires_grad:
+                    continue
+                if "bias" in name or "norm" in name or "embed" in name:
+                    no_decay_params.append(param)
+                else:
+                    decay_params.append(param)
 
         param_groups = [
             {"params": decay_params, "weight_decay": ocfg.weight_decay},
@@ -221,8 +262,18 @@ class Trainer:
 
     def _forward_batch(
         self, batch: dict[str, torch.Tensor],
+        augment: bool = False,
+        mask: torch.Tensor | None = None,
     ) -> dict[str, Any]:
-        """Run forward pass on a batch."""
+        """Run forward pass on a batch.
+
+        Args:
+            augment: if True, apply random jitter and point dropout for
+                     contrastive learning (second view).
+            mask: (B, T) bool token mask for masked-token pretraining.
+                  Passed through to the model so the processor replaces
+                  masked patch tokens with a learnable mask embedding.
+        """
         points = batch["points"].to(self.device, non_blocking=True)
         features = batch["features"].to(self.device, non_blocking=True)
         normals = batch.get("normals")
@@ -233,9 +284,99 @@ class Trainer:
         if curvature is not None:
             curvature = curvature.to(self.device, non_blocking=True)
 
+        if augment and self.model.training:
+            # Jitter point positions
+            noise = torch.randn_like(points) * 0.005
+            points = points + noise
+
+            # Keep features aligned with jittered points (first 3 dims are xyz)
+            features = features.clone()
+            if features.shape[-1] >= 3:
+                features[..., :3] = points
+
+            # Random point dropout (10%)
+            drop_mask = torch.rand(points.shape[:2], device=points.device) < 0.1
+            keep = (~drop_mask).unsqueeze(-1).float()
+            points = points * keep
+            features = features * keep
+            if normals is not None:
+                normals = normals * keep
+            if curvature is not None:
+                curvature = curvature * keep
+
         with torch.amp.autocast(self._amp_device_type, dtype=self.amp_dtype, enabled=self.amp_enabled):
-            out = self.model(points, features, normals, curvature)
+            out = self.model(points, features, normals, curvature, mask)
         return out
+
+    def _forward_concat(
+        self, batch: dict[str, torch.Tensor], token_mask: torch.Tensor | None,
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        """Single DDP forward with masked + augmented views concatenated.
+
+        Avoids two DDP forwards before one backward, which causes
+        gradient sync issues with find_unused_parameters=True.
+        """
+        # View A: masked (or unmasked if no mask)
+        points_a = batch["points"].to(self.device, non_blocking=True)
+        features_a = batch["features"].to(self.device, non_blocking=True)
+        normals_a = batch.get("normals")
+        curvature_a = batch.get("curvature")
+        if normals_a is not None:
+            normals_a = normals_a.to(self.device, non_blocking=True)
+        if curvature_a is not None:
+            curvature_a = curvature_a.to(self.device, non_blocking=True)
+
+        # View B: augmented (jitter + dropout, no mask)
+        noise = torch.randn_like(points_a) * 0.005
+        points_b = points_a + noise
+        features_b = features_a.clone()
+        if features_b.shape[-1] >= 3:
+            features_b[..., :3] = points_b
+        drop_mask = torch.rand(points_b.shape[:2], device=points_b.device) < 0.1
+        keep = (~drop_mask).unsqueeze(-1).float()
+        points_b = points_b * keep
+        features_b = features_b * keep
+        normals_b = normals_a * keep if normals_a is not None else None
+        curvature_b = curvature_a * keep if curvature_a is not None else None
+
+        B = points_a.shape[0]
+
+        # Concat along batch dim
+        points_cat = torch.cat([points_a, points_b], dim=0)
+        features_cat = torch.cat([features_a, features_b], dim=0)
+        normals_cat = torch.cat([normals_a, normals_b], dim=0) if normals_a is not None else None
+        curvature_cat = torch.cat([curvature_a, curvature_b], dim=0) if curvature_a is not None else None
+
+        # Mask: view A gets token_mask, view B gets no mask (all False)
+        if token_mask is not None:
+            mask_b = torch.zeros_like(token_mask)
+            mask_cat = torch.cat([token_mask, mask_b], dim=0)
+        else:
+            mask_cat = None
+
+        # Single forward
+        with torch.amp.autocast(self._amp_device_type, dtype=self.amp_dtype, enabled=self.amp_enabled):
+            out_cat = self.model(points_cat, features_cat, normals_cat, curvature_cat, mask_cat)
+
+        # Split outputs back into two views
+        def split_dict(d: dict, B: int) -> tuple[dict, dict]:
+            a, b = {}, {}
+            for k, v in d.items():
+                if isinstance(v, torch.Tensor) and v.shape[0] == 2 * B:
+                    a[k] = v[:B]
+                    b[k] = v[B:]
+                elif isinstance(v, dict):
+                    a[k], b[k] = split_dict(v, B)
+                elif isinstance(v, list):
+                    a[k] = [t[:B] if isinstance(t, torch.Tensor) and t.shape[0] == 2 * B else t for t in v]
+                    b[k] = [t[B:] if isinstance(t, torch.Tensor) and t.shape[0] == 2 * B else t for t in v]
+                else:
+                    a[k] = v
+                    b[k] = v
+            return a, b
+
+        out, out_aug = split_dict(out_cat, B)
+        return out, out_aug
 
     def train_epoch(
         self, train_loader: DataLoader, epoch: int,
@@ -251,16 +392,30 @@ class Trainer:
         pbar = tqdm(train_loader, desc=f"Epoch {epoch}", disable=not self.is_main)
         self.optimizer.zero_grad(set_to_none=True)
 
+        use_token_mask = (
+            self.cfg.train.loss.masked_token.enabled
+            and self.loss_computer.masked_token is not None
+        )
+
         for step_in_epoch, batch in enumerate(pbar):
             self._warmup_lr()
+            B = batch["points"].shape[0]
 
-            # Forward
-            out = self._forward_batch(batch)
+            # Create masked-token mask BEFORE forward so the model sees masked input
+            token_mask = None
+            if use_token_mask:
+                T = self.raw_model.encoder.num_tokens
+                token_mask = self.loss_computer.masked_token.create_mask(B, T, self.device)
 
-            # Second augmentation for contrastive loss
+            # Single forward: if contrastive is enabled, concat masked view + augmented
+            # view into one batch to avoid two DDP forwards before one backward.
+            do_contrastive = self.cfg.train.loss.contrastive.enabled
             out_aug = None
-            if self.cfg.train.loss.contrastive.enabled:
-                out_aug = self._forward_batch(batch)
+
+            if do_contrastive:
+                out, out_aug = self._forward_concat(batch, token_mask)
+            else:
+                out = self._forward_batch(batch, mask=token_mask)
 
             # Move labels to device
             label_keys = [
@@ -273,9 +428,9 @@ class Trainer:
                 if k in batch and isinstance(batch[k], torch.Tensor):
                     batch_device[k] = batch[k].to(self.device, non_blocking=True)
 
-            # Compute losses
+            # Compute losses — pass same token_mask so reconstruction uses same positions
             with torch.amp.autocast(self._amp_device_type, dtype=self.amp_dtype, enabled=self.amp_enabled):
-                losses = self.loss_computer(out, batch_device, out_aug)
+                losses = self.loss_computer(out, batch_device, out_aug, token_mask=token_mask)
 
             loss = losses["total"] / accum
 
@@ -302,15 +457,21 @@ class Trainer:
 
                 # Log
                 if self.is_main and self.global_step % self.tcfg.log_every == 0:
+                    log_dict = {}
                     for k, v in losses.items():
                         val = v.item() if isinstance(v, torch.Tensor) else v
                         self.writer.add_scalar(f"train/{k}", val, self.global_step)
-                    self.writer.add_scalar(
-                        "train/lr", self.optimizer.param_groups[0]["lr"], self.global_step,
-                    )
+                        log_dict[f"train/{k}"] = val
+                    lr = self.optimizer.param_groups[0]["lr"]
+                    self.writer.add_scalar("train/lr", lr, self.global_step)
+                    log_dict["train/lr"] = lr
                     if self.use_cuda:
                         mem_gb = torch.cuda.max_memory_allocated(self.device) / 1e9
                         self.writer.add_scalar("train/gpu_mem_gb", mem_gb, self.global_step)
+                        log_dict["train/gpu_mem_gb"] = mem_gb
+                    if self.wandb_run is not None:
+                        import wandb
+                        wandb.log(log_dict, step=self.global_step)
 
                 # Save
                 if self.is_main and self.global_step % self.tcfg.save_every == 0:
@@ -331,12 +492,26 @@ class Trainer:
         self.model.eval()
         all_losses: dict[str, list[float]] = {}
 
+        use_token_mask = (
+            self.cfg.train.loss.masked_token.enabled
+            and self.loss_computer.masked_token is not None
+        )
+
         for batch in tqdm(val_loader, desc="Eval", disable=not self.is_main):
-            out = self._forward_batch(batch)
+            B = batch["points"].shape[0]
+
+            # Mirror training: create mask and pass into model + loss
+            token_mask = None
+            if use_token_mask:
+                T = self.raw_model.encoder.num_tokens
+                token_mask = self.loss_computer.masked_token.create_mask(B, T, self.device)
+
+            out = self._forward_batch(batch, mask=token_mask)
 
             label_keys = [
                 "symmetry_label", "symmetry_planes", "symmetry_axes",
                 "primitive_labels", "part_labels", "reduction_label",
+                "repeated_sectors", "constant_cross_section",
             ]
             batch_device = {}
             for k in label_keys:
@@ -344,7 +519,7 @@ class Trainer:
                     batch_device[k] = batch[k].to(self.device, non_blocking=True)
 
             with torch.amp.autocast(self._amp_device_type, dtype=self.amp_dtype, enabled=self.amp_enabled):
-                losses = self.loss_computer(out, batch_device)
+                losses = self.loss_computer(out, batch_device, token_mask=token_mask)
 
             for k, v in losses.items():
                 val = v.item() if isinstance(v, torch.Tensor) else v
@@ -355,6 +530,9 @@ class Trainer:
         if self.is_main and self.writer:
             for k, v in avg.items():
                 self.writer.add_scalar(f"val/{k}", v, self.global_step)
+            if self.wandb_run is not None:
+                import wandb
+                wandb.log({f"val/{k}": v for k, v in avg.items()}, step=self.global_step)
 
         return avg
 
@@ -383,6 +561,9 @@ class Trainer:
             self._save_checkpoint(self.tcfg.epochs - 1, final=True)
             if self.writer:
                 self.writer.close()
+            if self.wandb_run is not None:
+                import wandb
+                wandb.finish()
 
     def _save_checkpoint(self, epoch: int, final: bool = False) -> None:
         tag = "final" if final else f"step_{self.global_step}"
@@ -391,6 +572,7 @@ class Trainer:
             "epoch": epoch,
             "global_step": self.global_step,
             "model_state_dict": self.raw_model.state_dict(),
+            "loss_computer_state_dict": self.loss_computer.state_dict(),
             "optimizer_state_dict": self.optimizer.state_dict(),
             "scheduler_state_dict": self.scheduler.state_dict(),
             "config": self.cfg,
@@ -401,6 +583,12 @@ class Trainer:
     def _load_checkpoint(self, path: str) -> None:
         ckpt = torch.load(path, map_location=self.device, weights_only=False)
         self.raw_model.load_state_dict(ckpt["model_state_dict"], strict=False)
+        if "loss_computer_state_dict" in ckpt:
+            try:
+                self.loss_computer.load_state_dict(ckpt["loss_computer_state_dict"], strict=False)
+            except Exception:
+                if self.is_main:
+                    print("Warning: could not restore loss_computer state; recon_proj reinitialized")
         try:
             self.optimizer.load_state_dict(ckpt["optimizer_state_dict"])
         except (ValueError, KeyError):

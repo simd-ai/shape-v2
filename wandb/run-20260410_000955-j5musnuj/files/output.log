@@ -1,0 +1,55 @@
+Model: 10,913,297 params (10,913,297 trainable)
+Device: cuda:0  AMP: bf16  DDP: True
+  GPU 0: NVIDIA H100 80GB HBM3 (85 GB)
+  GPU 1: NVIDIA H100 80GB HBM3 (85 GB)
+  GPU 2: NVIDIA H100 80GB HBM3 (85 GB)
+  GPU 3: NVIDIA H100 80GB HBM3 (85 GB)
+  GPU 4: NVIDIA H100 80GB HBM3 (85 GB)
+  GPU 5: NVIDIA H100 80GB HBM3 (85 GB)
+  GPU 6: NVIDIA H100 80GB HBM3 (85 GB)
+  GPU 7: NVIDIA H100 80GB HBM3 (85 GB)
+Training: 477 batches/epoch, 50 epochs
+DDP: 8 processes
+Epoch 0:   0%|                                                                                                                                                     | 0/477 [00:01<?, ?it/s]
+Traceback (most recent call last):
+  File "<frozen runpy>", line 198, in _run_module_as_main
+  File "<frozen runpy>", line 88, in _run_code
+  File "/home/nvidia/shape-v2/shape_foundation/scripts/train_pretrain.py", line 161, in <module>
+    main()
+  File "/home/nvidia/shape-v2/shape_foundation/scripts/train_pretrain.py", line 151, in main
+    trainer.train()
+  File "/home/nvidia/shape-v2/shape_foundation/training/trainer.py", line 457, in train
+    train_metrics = self.train_epoch(train_loader, epoch)
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/nvidia/shape-v2/shape_foundation/training/trainer.py", line 349, in train_epoch
+    loss.backward()
+  File "/home/nvidia/shape-v2/venv/lib/python3.12/site-packages/torch/_tensor.py", line 626, in backward
+    torch.autograd.backward(
+  File "/home/nvidia/shape-v2/venv/lib/python3.12/site-packages/torch/autograd/__init__.py", line 347, in backward
+    _engine_run_backward(
+  File "/home/nvidia/shape-v2/venv/lib/python3.12/site-packages/torch/autograd/graph.py", line 823, in _engine_run_backward
+    return Variable._execution_engine.run_backward(  # Calls into the C++ engine to run the backward pass
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+RuntimeError: Expected to mark a variable ready only once. This error is caused by one of the following reasons: 1) Use of a module parameter outside the `forward` function. Please make sure model parameters are not shared across multiple concurrent forward-backward passes. or try to use _set_static_graph() as a workaround if this module graph does not change during training loop.2) Reused parameters in multiple reentrant backward passes. For example, if you use multiple `checkpoint` functions to wrap the same part of your model, it would result in the same set of parameters been used by different reentrant backward passes multiple times, and hence marking a variable ready multiple times. DDP does not support such use cases in default. You can try to use _set_static_graph() as a workaround if your module graph does not change over iterations.
+Parameter at index 64 with name processor.mask_token has been marked as ready twice. This means that multiple autograd engine  hooks have fired for this particular parameter during this iteration.
+[rank0]: Traceback (most recent call last):
+[rank0]:   File "<frozen runpy>", line 198, in _run_module_as_main
+[rank0]:   File "<frozen runpy>", line 88, in _run_code
+[rank0]:   File "/home/nvidia/shape-v2/shape_foundation/scripts/train_pretrain.py", line 161, in <module>
+[rank0]:     main()
+[rank0]:   File "/home/nvidia/shape-v2/shape_foundation/scripts/train_pretrain.py", line 151, in main
+[rank0]:     trainer.train()
+[rank0]:   File "/home/nvidia/shape-v2/shape_foundation/training/trainer.py", line 457, in train
+[rank0]:     train_metrics = self.train_epoch(train_loader, epoch)
+[rank0]:                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank0]:   File "/home/nvidia/shape-v2/shape_foundation/training/trainer.py", line 349, in train_epoch
+[rank0]:     loss.backward()
+[rank0]:   File "/home/nvidia/shape-v2/venv/lib/python3.12/site-packages/torch/_tensor.py", line 626, in backward
+[rank0]:     torch.autograd.backward(
+[rank0]:   File "/home/nvidia/shape-v2/venv/lib/python3.12/site-packages/torch/autograd/__init__.py", line 347, in backward
+[rank0]:     _engine_run_backward(
+[rank0]:   File "/home/nvidia/shape-v2/venv/lib/python3.12/site-packages/torch/autograd/graph.py", line 823, in _engine_run_backward
+[rank0]:     return Variable._execution_engine.run_backward(  # Calls into the C++ engine to run the backward pass
+[rank0]:            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank0]: RuntimeError: Expected to mark a variable ready only once. This error is caused by one of the following reasons: 1) Use of a module parameter outside the `forward` function. Please make sure model parameters are not shared across multiple concurrent forward-backward passes. or try to use _set_static_graph() as a workaround if this module graph does not change during training loop.2) Reused parameters in multiple reentrant backward passes. For example, if you use multiple `checkpoint` functions to wrap the same part of your model, it would result in the same set of parameters been used by different reentrant backward passes multiple times, and hence marking a variable ready multiple times. DDP does not support such use cases in default. You can try to use _set_static_graph() as a workaround if your module graph does not change over iterations.
+[rank0]: Parameter at index 64 with name processor.mask_token has been marked as ready twice. This means that multiple autograd engine  hooks have fired for this particular parameter during this iteration.

@@ -280,6 +280,9 @@ class TransformerProcessor(nn.Module):
         self.layers = nn.ModuleList([TransformerBlock(cfg) for _ in range(cfg.num_layers)])
         self.norm = build_norm(cfg.hidden_size, cfg.norm_type)
 
+        # Learnable mask token for masked positions
+        self.mask_token = nn.Parameter(torch.zeros(1, 1, cfg.hidden_size))
+
         # Optional UViT skip connections
         self.uvit_skip = cfg.uvit_skip
         if self.uvit_skip and cfg.num_layers > 1:
@@ -311,15 +314,17 @@ class TransformerProcessor(nn.Module):
 
         # Apply mask if provided (replace masked patch tokens with learnable mask)
         if mask is not None:
-            # mask is per-token; we need per-patch mask
+            # mask is per-token (B, T); convert to per-patch using configurable threshold
             mask_3d = mask.view(B, H, W, D)
             p = self.cfg.patch_size
-            # a patch is masked if any of its tokens is masked
-            mask_patches = rearrange(mask_3d, "b (nh p1) (nw p2) (nd p3) -> b (nh nw nd) (p1 p2 p3)",
-                                     p1=p, p2=p, p3=p).any(dim=-1)  # (B, num_patches)
-            if not hasattr(self, "_mask_token"):
-                self._mask_token = nn.Parameter(torch.zeros(1, 1, self.cfg.hidden_size)).to(x.device)
-            x = torch.where(mask_patches.unsqueeze(-1), self._mask_token.expand_as(x), x)
+            # compute fraction of masked tokens per patch
+            patch_mask_counts = rearrange(
+                mask_3d.float(), "b (nh p1) (nw p2) (nd p3) -> b (nh nw nd) (p1 p2 p3)",
+                p1=p, p2=p, p3=p,
+            )
+            patch_mask_ratio = patch_mask_counts.mean(dim=-1)  # (B, num_patches)
+            mask_patches = patch_mask_ratio >= self.cfg.mask_patch_threshold
+            x = torch.where(mask_patches.unsqueeze(-1), self.mask_token.expand_as(x), x)
 
         # Positional embedding
         if self.pos_embed is not None:

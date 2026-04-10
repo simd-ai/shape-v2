@@ -1,0 +1,288 @@
+_wandb:
+    value:
+        cli_version: 0.25.1
+        e:
+            pm1zu2ee5p0k9bxeh51tz7j2t2tq64ea:
+                args:
+                    - --config
+                    - configs/small.yaml
+                cpu_count: 104
+                cpu_count_logical: 208
+                cudaVersion: "13.0"
+                disk:
+                    /:
+                        total: "206900281344"
+                        used: "181481132032"
+                email: bayang@simd.space
+                executable: /home/nvidia/shape-v2/venv/bin/python3.12
+                git:
+                    commit: f612f28ebeba86f0a77ce03cb0de9b878573ebb8
+                    remote: https://github.com/simd-ai/shape-v2
+                gpu: NVIDIA H100 80GB HBM3
+                gpu_count: 8
+                gpu_nvidia:
+                    - architecture: Hopper
+                      cudaCores: 16896
+                      memoryTotal: "85520809984"
+                      name: NVIDIA H100 80GB HBM3
+                      uuid: GPU-ef7ea8dc-7894-bb78-17f8-5df0e916df3b
+                    - architecture: Hopper
+                      cudaCores: 16896
+                      memoryTotal: "85520809984"
+                      name: NVIDIA H100 80GB HBM3
+                      uuid: GPU-add8dd97-e336-3ee4-2686-d5cea8037d42
+                    - architecture: Hopper
+                      cudaCores: 16896
+                      memoryTotal: "85520809984"
+                      name: NVIDIA H100 80GB HBM3
+                      uuid: GPU-f3b57c20-9872-1cb7-18d0-26912f18bbfb
+                    - architecture: Hopper
+                      cudaCores: 16896
+                      memoryTotal: "85520809984"
+                      name: NVIDIA H100 80GB HBM3
+                      uuid: GPU-1858801f-18ab-10dc-4628-a75f1879570e
+                    - architecture: Hopper
+                      cudaCores: 16896
+                      memoryTotal: "85520809984"
+                      name: NVIDIA H100 80GB HBM3
+                      uuid: GPU-583034be-5e4c-8e92-24af-c428485a8676
+                    - architecture: Hopper
+                      cudaCores: 16896
+                      memoryTotal: "85520809984"
+                      name: NVIDIA H100 80GB HBM3
+                      uuid: GPU-6b3adef2-7709-9fab-f33f-882a69b17db0
+                    - architecture: Hopper
+                      cudaCores: 16896
+                      memoryTotal: "85520809984"
+                      name: NVIDIA H100 80GB HBM3
+                      uuid: GPU-686dbd01-c800-be6d-20e4-3431910d80d1
+                    - architecture: Hopper
+                      cudaCores: 16896
+                      memoryTotal: "85520809984"
+                      name: NVIDIA H100 80GB HBM3
+                      uuid: GPU-6a117ff9-846a-3516-3901-4ee915956066
+                host: brev-7pzgnjp5p
+                memory:
+                    total: "1978431717376"
+                os: Linux-6.17.0-1009-gcp-x86_64-with-glibc2.39
+                program: -m shape_foundation.scripts.train_pretrain
+                python: CPython 3.12.13
+                root: /home/nvidia/shape-v2
+                startedAt: "2026-04-10T00:00:08.273608Z"
+                writerId: pm1zu2ee5p0k9bxeh51tz7j2t2tq64ea
+        m: []
+        python_version: 3.12.13
+        t:
+            "1":
+                - 1
+            "2":
+                - 1
+            "3":
+                - 15
+                - 16
+            "4": 3.12.13
+            "5": 0.25.1
+            "12": 0.25.1
+            "13": linux-x86_64
+data:
+    value:
+        cache_dir: data_cache
+        sources:
+            - max_samples: -1
+              name: thingi10k
+              root: data_cache/thingi10k/thingi10k
+              split: train
+              weight: 1
+            - max_samples: -1
+              name: mfcad
+              root: data_cache/mfcad/mfcad
+              split: train
+              weight: 1
+            - max_samples: -1
+              name: fusion360
+              root: data_cache/fusion360/fusion360
+              split: train
+              weight: 0.5
+        synthetic_labels:
+            axisymmetry_threshold: 0.02
+            enabled: true
+            generate_perturbed: true
+            perturbation_scale: 0.01
+            primitive_fit_threshold: 0.005
+            rotational_angle_steps: 36
+            symmetry_plane_threshold: 0.01
+heads:
+    value:
+        caption:
+            enabled: true
+            hidden_dim: 128
+            max_length: 64
+            mode: template
+            vocab_size: 512
+        embedding_dim: 128
+        part:
+            enabled: true
+            hidden_dim: 128
+            hierarchical: true
+            max_parts: 64
+        pooling: attention
+        primitive:
+            detect_constant_cross_section: true
+            detect_repeated_sectors: true
+            enabled: true
+            hidden_dim: 128
+            num_primitive_types: 6
+        reduction:
+            enabled: true
+            hidden_dim: 128
+        symmetry:
+            enabled: true
+            hidden_dim: 128
+            max_candidates: 3
+            num_classes: 5
+            regress_axis: true
+            regress_plane: true
+input:
+    value:
+        append_constant_channel: true
+        canonicalize: true
+        compute_curvature: true
+        compute_normals: true
+        constant_channel_value: 1
+        mode: surface_sampled_points
+        num_surface_points: 4096
+        sharp_edge_ratio: 0.3
+processor:
+    value:
+        dropout: 0
+        hidden_size: 128
+        mask_patch_threshold: 0.5
+        mlp_ratio: 4
+        norm_type: rmsnorm
+        num_heads: 4
+        num_kv_heads: 2
+        num_layers: 3
+        patch_size: 6
+        positional_embedding: absolute
+        rope_theta: 10000
+        spatial_dims: 3
+        uvit_skip: false
+tokenizer:
+    value:
+        agno:
+            dropout: 0
+            initial_temperature: 0.1
+            learned_temperature: true
+            num_heads: 4
+            similarity: cosine
+        geo_embed:
+            augment_curvature: true
+            augment_normals: true
+            augment_thickness: false
+            mlp_hidden: 128
+            mlp_layers: 2
+            mode: statistical
+            return_raw_stats: true
+            sdf_auxiliary_target: false
+            stat_features:
+                - mean
+                - std
+                - min
+                - max
+        latent:
+            adaptive_num_tokens: 4096
+            latent_shape:
+                - 24
+                - 24
+                - 24
+            multires_shapes:
+                - - 24
+                  - 24
+                  - 24
+                - - 48
+                  - 48
+                  - 48
+            strategy: structured_latent_grid
+            token_dim: 128
+        neighbor:
+            backend: torch_cluster
+            edge_drop_rate: 0
+            enable_caching: true
+            knn_k: 32
+            max_neighbors: 64
+            multiscale_radii:
+                - 0.05
+                - 0.1
+                - 0.2
+            ratio_sampling: 1
+            strategy: radius
+        num_scales: 3
+        scale_fusion: concat_project
+        token_pos_encoding: true
+train:
+    value:
+        batch_size: 16
+        checkpoint_dir: checkpoints
+        compile_model: false
+        epochs: 50
+        eval_every: 1000
+        gradient_accumulation_steps: 2
+        log_dir: runs
+        log_every: 50
+        loss:
+            contrastive:
+                enabled: true
+                num_augmentations: 2
+                temperature: 0.07
+            inpainting:
+                crop_ratio: 0.25
+                crop_strategy: spatial
+                enabled: true
+            masked_token:
+                block_size: 4
+                enabled: true
+                mask_ratio: 0.25
+                mask_strategy: random
+                target: geo_stats
+            supervised:
+                axis_regression_weight: 0.5
+                part_weight: 1
+                plane_regression_weight: 0.5
+                primitive_weight: 1
+                symmetry_weight: 1
+            text_align:
+                enabled: false
+                temperature: 0.07
+            weights:
+                contrastive: 0.2
+                inpainting: 0.5
+                masked_token: 1
+                part: 1
+                primitive: 1
+                reduction: 1
+                symmetry: 1
+                text_align: 0.2
+        max_grad_norm: 1
+        mixed_precision: bf16
+        num_workers: 4
+        optimizer:
+            betas:
+                - 0.9
+                - 0.95
+            lr: 0.0003
+            lr_schedule: cosine
+            name: adamw
+            warmup_steps: 500
+            weight_decay: 0.05
+        pin_memory: true
+        save_every: 2000
+        seed: 42
+        wandb:
+            enabled: true
+            entity: ""
+            name: ""
+            project: shape-foundation
+            tags:
+                - small
+                - pretrain
+                - v1-fix

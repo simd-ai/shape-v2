@@ -61,7 +61,7 @@ class GeoEmbedConfig:
     )
     mlp_hidden: int = 128
     mlp_layers: int = 2
-    return_raw_stats: bool = False  # expose pre-MLP stats for debugging / masked targets
+    return_raw_stats: bool = True  # required for masked token and inpainting pretraining losses
     augment_normals: bool = True
     augment_curvature: bool = True
     augment_thickness: bool = False
@@ -87,6 +87,7 @@ class TokenizerConfig:
     agno: AGNOConfig = dc.field(default_factory=AGNOConfig)
     num_scales: int = 3  # number of multi-scale MAGNO layers
     scale_fusion: str = "concat_project"  # concat_project | sum | gated
+    token_pos_encoding: bool = True  # add latent grid 3D positional encoding to tokens before processor
 
 
 @dc.dataclass
@@ -104,6 +105,7 @@ class ProcessorConfig:
     norm_type: str = "rmsnorm"  # rmsnorm | layernorm
     uvit_skip: bool = False  # UViT-style long-range skip connections
     spatial_dims: int = 3  # 2 or 3
+    mask_patch_threshold: float = 0.5  # fraction of masked tokens in patch to mark whole patch masked
 
 
 @dc.dataclass
@@ -151,6 +153,7 @@ class ReductionHeadConfig:
 @dc.dataclass
 class HeadsConfig:
     embedding_dim: int = 256
+    pooling: str = "attention"  # mean | attention
     symmetry: SymmetryHeadConfig = dc.field(default_factory=SymmetryHeadConfig)
     primitive: PrimitiveHeadConfig = dc.field(default_factory=PrimitiveHeadConfig)
     part: PartHeadConfig = dc.field(default_factory=PartHeadConfig)
@@ -166,7 +169,7 @@ class HeadsConfig:
 class MaskedTokenLossConfig:
     enabled: bool = True
     mask_ratio: float = 0.25
-    mask_strategy: str = "random"  # random | block | hybrid
+    mask_strategy: str = "random"  # random | block | hybrid | spatial_3d
     block_size: int = 4
     target: str = "geo_stats"  # geo_stats | coordinates
 
@@ -201,12 +204,26 @@ class TextAlignLossConfig:
 
 
 @dc.dataclass
+class LossWeightsConfig:
+    """Per-loss scalar weights applied before summing into total loss."""
+    masked_token: float = 1.0
+    contrastive: float = 0.2
+    inpainting: float = 0.5
+    symmetry: float = 1.0
+    primitive: float = 1.0
+    part: float = 1.0
+    reduction: float = 1.0
+    text_align: float = 0.2
+
+
+@dc.dataclass
 class LossConfig:
     masked_token: MaskedTokenLossConfig = dc.field(default_factory=MaskedTokenLossConfig)
     contrastive: ContrastiveLossConfig = dc.field(default_factory=ContrastiveLossConfig)
     inpainting: InpaintingLossConfig = dc.field(default_factory=InpaintingLossConfig)
     supervised: SupervisedLossConfig = dc.field(default_factory=SupervisedLossConfig)
     text_align: TextAlignLossConfig = dc.field(default_factory=TextAlignLossConfig)
+    weights: LossWeightsConfig = dc.field(default_factory=LossWeightsConfig)
 
 
 @dc.dataclass
@@ -217,6 +234,15 @@ class OptimizerConfig:
     betas: tuple[float, float] = (0.9, 0.95)
     warmup_steps: int = 1000
     lr_schedule: str = "cosine"  # cosine | linear | constant
+
+
+@dc.dataclass
+class WandbConfig:
+    enabled: bool = False
+    project: str = "shape-foundation"
+    entity: str = ""  # W&B team/user name, empty = default
+    name: str = ""  # run name, empty = auto-generated
+    tags: list[str] = dc.field(default_factory=list)
 
 
 @dc.dataclass
@@ -233,10 +259,11 @@ class TrainConfig:
     log_every: int = 50
     eval_every: int = 1000
     save_every: int = 2000
-    checkpoint_dir: str = "checkpoints"
+    checkpoint_dir: str = "/data/shape-v2/checkpoints"
     log_dir: str = "runs"
     optimizer: OptimizerConfig = dc.field(default_factory=OptimizerConfig)
     loss: LossConfig = dc.field(default_factory=LossConfig)
+    wandb: WandbConfig = dc.field(default_factory=WandbConfig)
 
 
 # ---------------------------------------------------------------------------

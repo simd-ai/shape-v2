@@ -11,18 +11,15 @@ requires-python = ">=3.10"
 license = {text = "MIT"}
 
 dependencies = [
-    "torch>=2.2",
-    "torch-geometric>=2.5",
-    "torch-cluster>=1.6",
-    "torch-scatter>=2.1",
-    "numpy>=1.24",
-    "trimesh>=4.0",
-    "pyyaml>=6.0",
-    "tqdm>=4.66",
-    "tensorboard>=2.15",
-    "einops>=0.7",
-    "meshio>=5.3",
-    "scipy>=1.11",
+    "numpy",
+    "trimesh",
+    "pyyaml",
+    "tqdm",
+    "tensorboard",
+    "einops",
+    "meshio",
+    "gmsh",
+    "scipy",
 ]
 
 [project.optional-dependencies]

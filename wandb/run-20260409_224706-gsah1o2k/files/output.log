@@ -1,0 +1,79 @@
+Model: 10,912,400 params (10,912,400 trainable)
+Device: cuda:0  AMP: bf16  DDP: True
+  GPU 0: NVIDIA H100 80GB HBM3 (85 GB)
+  GPU 1: NVIDIA H100 80GB HBM3 (85 GB)
+  GPU 2: NVIDIA H100 80GB HBM3 (85 GB)
+  GPU 3: NVIDIA H100 80GB HBM3 (85 GB)
+  GPU 4: NVIDIA H100 80GB HBM3 (85 GB)
+  GPU 5: NVIDIA H100 80GB HBM3 (85 GB)
+  GPU 6: NVIDIA H100 80GB HBM3 (85 GB)
+  GPU 7: NVIDIA H100 80GB HBM3 (85 GB)
+Training: 477 batches/epoch, 50 epochs
+DDP: 8 processes
+Epoch 0: 100%|███████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████| 477/477 [07:16<00:00,  1.09it/s, loss=6070.4521]
+Epoch 0: masked_token=22888.0628, contrastive=1.8971, inpainting=31984.6849, symmetry=1.1484, reduction=1.4390, total=54877.2320
+Epoch 1: 100%|██████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████| 477/477 [07:13<00:00,  1.10it/s, loss=14066.4102]
+Epoch 1: masked_token=16027.9289, contrastive=0.8946, inpainting=22483.5453, symmetry=1.0099, reduction=1.3622, total=38514.7413
+Epoch 2: 100%|████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████| 477/477 [07:13<00:00,  1.10it/s, loss=1376834.3750]
+Epoch 2: masked_token=14048.6597, contrastive=1.2656, inpainting=16739.1602, symmetry=0.9707, reduction=1.3326, total=30791.3887
+Epoch 3: 100%|███████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████| 477/477 [07:14<00:00,  1.10it/s, loss=4319.3062]
+Epoch 3: masked_token=17132.9455, contrastive=1.1618, inpainting=17414.7311, symmetry=0.9077, reduction=1.2979, total=34551.0438
+Epoch 4: 100%|███████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████| 477/477 [07:14<00:00,  1.10it/s, loss=3279.9766]
+Epoch 4: masked_token=27044.1682, contrastive=1.0236, inpainting=28788.1545, symmetry=0.8860, reduction=1.2721, total=55835.5032
+Epoch 5: 100%|███████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████| 477/477 [07:14<00:00,  1.10it/s, loss=3077.0442]
+Epoch 5: masked_token=20817.1010, contrastive=1.0477, inpainting=36921.7910, symmetry=0.8690, reduction=1.2649, total=57742.0743
+Epoch 6: 100%|█████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████| 477/477 [07:14<00:00,  1.10it/s, loss=507879.5000]
+Epoch 6: masked_token=18861.3012, contrastive=1.0309, inpainting=25502.2839, symmetry=0.8370, reduction=1.2449, total=44366.6991
+Epoch 7:   7%|████████▊                                                                                                                   | 34/477 [00:31<06:49,  1.08it/s, loss=2949.8301]
+Traceback (most recent call last):
+  File "<frozen runpy>", line 198, in _run_module_as_main
+  File "<frozen runpy>", line 88, in _run_code
+  File "/home/nvidia/shape-v2/shape_foundation/scripts/train_pretrain.py", line 161, in <module>
+    main()
+  File "/home/nvidia/shape-v2/shape_foundation/scripts/train_pretrain.py", line 151, in main
+    trainer.train()
+  File "/home/nvidia/shape-v2/shape_foundation/training/trainer.py", line 418, in train
+    train_metrics = self.train_epoch(train_loader, epoch)
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/nvidia/shape-v2/shape_foundation/training/trainer.py", line 315, in train_epoch
+    losses = self.loss_computer(out, batch_device, out_aug)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/nvidia/shape-v2/venv/lib/python3.12/site-packages/torch/nn/modules/module.py", line 1739, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/nvidia/shape-v2/venv/lib/python3.12/site-packages/torch/nn/modules/module.py", line 1750, in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/nvidia/shape-v2/shape_foundation/training/losses.py", line 383, in forward
+    inpaint_mask = self.inpainting.create_spatial_mask(B, grid_shape, device)
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/nvidia/shape-v2/shape_foundation/training/losses.py", line 153, in create_spatial_mask
+    mask[b, idx] = True
+    ~~~~^^^^^^^^
+KeyboardInterrupt
+[rank0]: Traceback (most recent call last):
+[rank0]:   File "<frozen runpy>", line 198, in _run_module_as_main
+[rank0]:   File "<frozen runpy>", line 88, in _run_code
+[rank0]:   File "/home/nvidia/shape-v2/shape_foundation/scripts/train_pretrain.py", line 161, in <module>
+[rank0]:     main()
+[rank0]:   File "/home/nvidia/shape-v2/shape_foundation/scripts/train_pretrain.py", line 151, in main
+[rank0]:     trainer.train()
+[rank0]:   File "/home/nvidia/shape-v2/shape_foundation/training/trainer.py", line 418, in train
+[rank0]:     train_metrics = self.train_epoch(train_loader, epoch)
+[rank0]:                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank0]:   File "/home/nvidia/shape-v2/shape_foundation/training/trainer.py", line 315, in train_epoch
+[rank0]:     losses = self.loss_computer(out, batch_device, out_aug)
+[rank0]:              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank0]:   File "/home/nvidia/shape-v2/venv/lib/python3.12/site-packages/torch/nn/modules/module.py", line 1739, in _wrapped_call_impl
+[rank0]:     return self._call_impl(*args, **kwargs)
+[rank0]:            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank0]:   File "/home/nvidia/shape-v2/venv/lib/python3.12/site-packages/torch/nn/modules/module.py", line 1750, in _call_impl
+[rank0]:     return forward_call(*args, **kwargs)
+[rank0]:            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank0]:   File "/home/nvidia/shape-v2/shape_foundation/training/losses.py", line 383, in forward
+[rank0]:     inpaint_mask = self.inpainting.create_spatial_mask(B, grid_shape, device)
+[rank0]:                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank0]:   File "/home/nvidia/shape-v2/shape_foundation/training/losses.py", line 153, in create_spatial_mask
+[rank0]:     mask[b, idx] = True
+[rank0]:     ~~~~^^^^^^^^
+[rank0]: KeyboardInterrupt

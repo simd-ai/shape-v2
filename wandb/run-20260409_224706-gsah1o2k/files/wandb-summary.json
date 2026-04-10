@@ -1,0 +1,1 @@
+{"train/inpainting":1338.36572265625,"_wandb":{"runtime":3074},"_runtime":3074.814846028,"train/masked_token":1280.517333984375,"_timestamp":1.7757778414968345e+09,"train/symmetry":0.7285690307617188,"train/contrastive":0.9613533020019531,"_step":1650,"train/total":2621.6787109375,"train/lr":0.00028670508624528446,"train/reduction":1.10601806640625,"train/gpu_mem_gb":39.40214784}

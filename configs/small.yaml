@@ -20,6 +20,7 @@ processor:
 
 heads:
   embedding_dim: 128
+  pooling: attention
   symmetry:
     hidden_dim: 128
   primitive:
@@ -33,16 +34,34 @@ heads:
 
 train:
   epochs: 50
-  batch_size: 64
+  batch_size: 16
+  gradient_accumulation_steps: 2
+  mixed_precision: bf16
+  num_workers: 4
+  pin_memory: true
   optimizer:
     lr: 3.0e-4
     warmup_steps: 500
+  loss:
+    weights:
+      masked_token: 1.0
+      contrastive: 0.2
+      inpainting: 0.5
+      symmetry: 1.0
+      reduction: 1.0
+  wandb:
+    enabled: true
+    project: shape-foundation
+    tags: [small, pretrain, v1-fix]
 
 data:
   sources:
-    - name: abc
-      weight: 1.0
     - name: thingi10k
+      root: data_cache/thingi10k/thingi10k
+      weight: 1.0
+    - name: mfcad
+      root: data_cache/mfcad/mfcad
+      weight: 1.0
+    - name: fusion360
+      root: data_cache/fusion360/fusion360
       weight: 0.5
-    # - name: shapenet  # requires access approval — re-enable when available
-    #   weight: 0.5

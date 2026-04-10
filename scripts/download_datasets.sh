@@ -205,7 +205,7 @@ print(f'  [objaverse] {len(uids)} objects available.')
 max_download = int(os.environ.get('OBJAVERSE_MAX', '100000'))
 subset = uids[:max_download]
 print(f'  [objaverse] Downloading {len(subset)} objects...')
-objects = objaverse.load_objects(subset, download_processes=8)
+objects = objaverse.load_objects(subset, download_processes=32)
 
 # Symlink/copy to dest
 for uid, path in objects.items():
@@ -256,11 +256,35 @@ download_thingi10k() {
     fi
     echo "[thingi10k] Downloading Thingi10K..."
     mkdir -p "$dest"
-    local archive="$dest/Thingi10K.zip"
-    download_file "https://ten-thousand-models.appspot.com/Thingi10K.zip" "$archive"
-    echo "  [thingi10k] Extracting..."
-    unzip -q -o "$archive" -d "$dest"
-    echo "  [thingi10k] Done."
+
+    # Try HuggingFace mirror first (tar.gz)
+    local archive="$dest/Thingi10K.tar.gz"
+    local hf_url="https://huggingface.co/datasets/Thingi10K/Thingi10K/resolve/main/Thingi10K.tar.gz"
+    echo "  [thingi10k] Fetching from HuggingFace mirror..."
+    if download_file "$hf_url" "$archive" 2>/dev/null; then
+        echo "  [thingi10k] Extracting..."
+        tar -xzf "$archive" -C "$dest"
+        echo "  [thingi10k] Done."
+        return
+    fi
+
+    # Fallback: use thingi10k Python package with raw variant
+    echo "  [thingi10k] HuggingFace download failed, trying Python package..."
+    pip install -q thingi10k 2>/dev/null || true
+    python3 -c "
+import thingi10k, shutil, os
+dest = '$dest'
+print('  [thingi10k] Downloading via thingi10k package (raw variant)...')
+thingi10k.init(variant='raw')
+db = thingi10k.dataset()
+count = 0
+for entry in db:
+    src = entry.path
+    if src and os.path.exists(src):
+        shutil.copy2(src, os.path.join(dest, os.path.basename(src)))
+        count += 1
+print(f'  [thingi10k] {count} meshes copied to {dest}')
+"
 }
 
 download_partnet() {
@@ -340,25 +364,25 @@ download_mfcad() {
 
 case "$SIZE" in
     small)
-        DATASETS="abc thingi10k"
+        DATASETS="thingi10k mfcad fusion360"
         echo "=== Downloading datasets for SMALL config ==="
-        echo "=== Datasets: $DATASETS ==="
+        echo "=== Datasets: $DATASETS (~10-15 GB preprocessed) ==="
         ;;
     medium)
-        DATASETS="abc objaverse thingi10k"
+        DATASETS="thingi10k objaverse mfcad fusion360 partnet"
         echo "=== Downloading datasets for MEDIUM config ==="
-        echo "=== Datasets: $DATASETS ==="
+        echo "=== Datasets: $DATASETS (~50-60 GB preprocessed) ==="
         ;;
     large)
         DATASETS="abc objaverse objaverse_xl thingi10k partnet fusion360 mfcad"
         echo "=== Downloading datasets for LARGE config ==="
-        echo "=== Datasets: $DATASETS ==="
+        echo "=== Datasets: $DATASETS (~500 GB+ preprocessed) ==="
         ;;
     *)
         echo "Usage: $0 [small|medium|large]"
-        echo "  small  : abc, shapenet"
-        echo "  medium : abc, shapenet, objaverse, thingi10k"
-        echo "  large  : abc, shapenet, objaverse, objaverse_xl, thingi10k, partnet, fusion360, mfcad"
+        echo "  small  : thingi10k, mfcad, fusion360"
+        echo "  medium : thingi10k, objaverse, mfcad, fusion360, partnet"
+        echo "  large  : abc, objaverse, objaverse_xl, thingi10k, partnet, fusion360, mfcad"
         exit 1
         ;;
 esac

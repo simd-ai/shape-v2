@@ -12,54 +12,104 @@
 
 ## Quick Start
 
+### Option A: From Preprocessed Data (Recommended)
+
+If someone has already preprocessed the data and uploaded to GCS, skip straight to training:
+
 ```bash
-# Install (tested on CUDA 12.8+ / V100/H100)
+# 1. Install
 pip install torch --index-url https://download.pytorch.org/whl/cu124
+pip install torch-geometric torch-cluster torch-scatter -f https://data.pyg.org/whl/torch-2.6.0+cu124.html
 pip install -e .
 
-# Also install aria2 for fast parallel downloads
-sudo apt-get install -y aria2 p7zip-full
+# 2. Pull preprocessed .pt files from GCS
+gcloud auth login
+gcloud config set project YOUR_PROJECT_ID
+gsutil -m rsync -r gs://shape-foundation-data/data_cache/ data_cache/
+
+# 3. Train
+torchrun --nproc_per_node=8 -m shape_foundation.scripts.train_pretrain --config configs/small.yaml
 ```
 
-## Step 1: Download Datasets
+### Option B: From Scratch
+
+Full pipeline: download raw meshes → preprocess → train.
+
+#### Step 1: Install
 
 ```bash
-# Download datasets — choose a config size:
-#   small  = abc, thingi10k
-#   medium = abc, objaverse, thingi10k
-#   large  = abc, objaverse, objaverse_xl, thingi10k, partnet, fusion360, mfcad
+# System dependencies (needed for STEP file processing via gmsh)
+sudo apt-get install -y aria2 p7zip-full libxcursor1 libxinerama1 libxft2 libxmu6 libxi6 libglu1-mesa libgl1
+
+# Python dependencies (install torch first — PyG extensions build against it)
+pip install torch --index-url https://download.pytorch.org/whl/cu124
+pip install torch-geometric torch-cluster torch-scatter -f https://data.pyg.org/whl/torch-2.6.0+cu124.html
+pip install -e .
+```
+
+#### Step 2: Download Datasets
+
+```bash
+# Choose a tier:
+#   small  = thingi10k, mfcad, fusion360           (~68 GB raw, ~15 GB preprocessed)
+#   medium = + objaverse, partnet                   (~50-60 GB preprocessed)
+#   large  = + abc, objaverse_xl                    (~500 GB+ preprocessed)
 ./scripts/download_datasets.sh small
 
-# Download more ABC chunks (default is 5, max 100, ~10k meshes each):
-ABC_CHUNKS=20 ./scripts/download_datasets.sh small
-
-# aria2c uses 16 parallel connections per file, chunks download simultaneously.
-# Downloads are resumable — re-run the same command if interrupted.
-# Raw data goes to data_raw/<dataset_name>/
+# Check what's downloaded
+./scripts/check_datasets.sh
 ```
 
-## Step 2: Extract Archives
-
+Fusion360 segmentation subset needs a separate download (not automated):
 ```bash
-# Extract ABC 7z archives (if not auto-extracted by download script)
-for f in data_raw/abc/abc_*_obj_v00.7z; do 7z x -odata_raw/abc "$f" -y; done
+aria2c -x 16 -s 16 -d data_raw/fusion360 -o s2.0.1.zip \
+  "https://fusion-360-gallery-dataset.s3.us-west-2.amazonaws.com/segmentation/s2.0.1/s2.0.1.zip"
+unzip -q -o data_raw/fusion360/s2.0.1.zip -d data_raw/fusion360
 ```
 
-## Step 3: Preprocess into .pt Files
+#### Step 3: Preprocess into .pt Files
+
+Each raw mesh is converted to a self-contained `.pt` file with surface points, normals, features, and curvature. Preprocessing is parallelized across CPU cores and resumable (safe to cancel and rerun).
 
 ```bash
-# Preprocess a specific dataset
-python -m shape_foundation.scripts.prepare_dataset --source abc --root data_raw/abc --output data_cache/abc
-
-# Preprocess thingi10k
+# Auto-parallelized (uses 75% of CPU cores by default)
 python -m shape_foundation.scripts.prepare_dataset --source thingi10k --root data_raw/thingi10k --output data_cache/thingi10k
+python -m shape_foundation.scripts.prepare_dataset --source mfcad --root data_raw/mfcad --output data_cache/mfcad
+python -m shape_foundation.scripts.prepare_dataset --source fusion360 --root data_raw/fusion360 --output data_cache/fusion360
 
-# Or generate synthetic data (no download needed)
+# Control parallelism manually
+python -m shape_foundation.scripts.prepare_dataset --source thingi10k --root data_raw/thingi10k --output data_cache/thingi10k --workers 64
+
+# Generate synthetic data (no download needed)
 python -m shape_foundation.scripts.prepare_dataset --generate-synthetic --n-per-type 500
 
-# Limit samples for faster testing
-python -m shape_foundation.scripts.prepare_dataset --source abc --root data_raw/abc --output data_cache/abc --max-samples 1000
+# Limit samples for quick testing
+python -m shape_foundation.scripts.prepare_dataset --source mfcad --root data_raw/mfcad --output data_cache/mfcad --max-samples 1000
 ```
+
+Note: STEP files (MFCAD, Fusion360) are slower to preprocess than STL/OBJ (Thingi10K) because gmsh must tessellate CAD geometry.
+
+#### Step 4: Upload to GCS (for team sharing)
+
+```bash
+gcloud auth login
+gcloud config set project YOUR_PROJECT_ID
+
+# Create bucket (one-time)
+gsutil mb -l us-central1 gs://shape-foundation-data
+
+# Upload preprocessed data (resumable — safe to rerun if interrupted)
+gsutil -m rsync -r data_cache/thingi10k/ gs://shape-foundation-data/data_cache/thingi10k/
+gsutil -m rsync -r data_cache/mfcad/ gs://shape-foundation-data/data_cache/mfcad/
+gsutil -m rsync -r data_cache/fusion360/ gs://shape-foundation-data/data_cache/fusion360/
+
+# Upload checkpoints after training
+gsutil -m rsync -r checkpoints/ gs://shape-foundation-data/checkpoints/
+```
+
+No need to upload `data_raw/` — the `.pt` cache is all you need for training.
+
+#### Step 5: Train (Pretrain)
 
 ## Step 4: Train (Pretrain)
 
@@ -222,57 +272,52 @@ python -m shape_foundation.scripts.train_pretrain --config configs/ablations/los
 
 ## Cloud Storage (GCS)
 
-Save and restore data across instances using Google Cloud Storage.
+Only the preprocessed `.pt` files and checkpoints need to be shared — raw data is not needed.
 
 ```bash
-# --- Setup (one-time) ---
-gcloud auth login
-gcloud config set project YOUR_PROJECT_ID
-gcloud storage buckets create gs://shape-foundation-data --location=us-central1
-
-# --- Upload to GCS ---
-# Raw datasets (~1TB+)
-gsutil -m rsync -r data_raw/ gs://shape-foundation-data/data_raw/
-# Preprocessed .pt files
-gsutil -m rsync -r data_cache/ gs://shape-foundation-data/data_cache/
-# Checkpoints
+# --- Upload (after preprocessing/training) ---
+gsutil -m rsync -r data_cache/thingi10k/ gs://shape-foundation-data/data_cache/thingi10k/
+gsutil -m rsync -r data_cache/mfcad/ gs://shape-foundation-data/data_cache/mfcad/
+gsutil -m rsync -r data_cache/fusion360/ gs://shape-foundation-data/data_cache/fusion360/
 gsutil -m rsync -r checkpoints/ gs://shape-foundation-data/checkpoints/
 
-# --- Download from GCS (on a new instance) ---
+# --- Download (on a new instance) ---
 gcloud auth login
 gcloud config set project YOUR_PROJECT_ID
-gsutil -m rsync -r gs://shape-foundation-data/data_raw/ data_raw/
 gsutil -m rsync -r gs://shape-foundation-data/data_cache/ data_cache/
 gsutil -m rsync -r gs://shape-foundation-data/checkpoints/ checkpoints/
 
-# Then resume training
+# Then train directly — no preprocessing needed
+pip install torch --index-url https://download.pytorch.org/whl/cu124
+pip install torch-geometric torch-cluster torch-scatter -f https://data.pyg.org/whl/torch-2.6.0+cu124.html
 pip install -e .
 torchrun --nproc_per_node=8 -m shape_foundation.scripts.train_pretrain --config configs/small.yaml
 ```
 
 Notes:
 - `gsutil -m rsync` uses parallel transfers and only syncs new/changed files (resumable).
-- To skip raw data and only sync preprocessed files: just sync `data_cache/` and `checkpoints/`.
+- If upload gets interrupted, just rerun — it picks up where it left off.
+- Upload datasets one at a time if the full rsync times out.
 
 ## Datasets
 
-| Dataset | Download Method | Status |
-|---------|----------------|--------|
-| ABC | `./scripts/download_datasets.sh` (auto) | Available |
-| Thingi10K | `./scripts/download_datasets.sh` (auto) | Available |
-| Objaverse | `./scripts/download_datasets.sh` (auto, via Python) | Available |
-| Objaverse XL | `./scripts/download_datasets.sh` (auto, via Python) | Available |
-| ShapeNet | Manual — requires shapenet.org / HuggingFace access | Pending approval |
-| PartNet | Manual — requires Stanford access | Manual |
-| Fusion360 | `./scripts/download_datasets.sh` (semi-auto) | Available |
-| MFCAD++ | `./scripts/download_datasets.sh` (auto) | Available |
+| Dataset | Files | Raw Size | Format | Source |
+|---------|-------|----------|--------|--------|
+| Thingi10K | 9,999 | 46 GB | STL/OBJ | [HuggingFace](https://huggingface.co/datasets/Thingi10K/Thingi10K) |
+| MFCAD++ | 30,976 | 2.5 GB | STEP | [GitHub](https://github.com/hducg/MFCAD) |
+| Fusion360 | 71,362 | 20 GB | STEP/BREP | [S3](https://fusion-360-gallery-dataset.s3.us-west-2.amazonaws.com/segmentation/s2.0.1/s2.0.1.zip) |
+| Objaverse | 100K+ | ~50 GB | GLB/OBJ | `objaverse` Python package |
+| PartNet | varies | varies | OBJ | Manual — requires Stanford access |
+| ABC | ~1M | ~1 TB | OBJ | [ABC Dataset](https://deep-geometry.github.io/abc-dataset/) |
+| Objaverse XL | 500K+ | ~200 GB | GLB/OBJ | `objaverse` Python package |
 
-| Stage | Datasets | Purpose |
-|-------|----------|---------|
-| 1 | ABC, Objaverse, Thingi10K | Broad geometry diversity |
-| 2 | + PartNet, Fusion360, MFCAD++ | Engineering parts, topology |
-| 3 | + SHREC 2022/2023, Scan2CAD | Symmetry/primitive supervision |
-| 4 | + Custom/synthetic | CFD reduction labels |
+| Tier | Datasets | ~Preprocessed Size | Use Case |
+|------|----------|-------------------|----------|
+| **small** | Thingi10K, MFCAD++, Fusion360 | ~10-15 GB | Initial experiments |
+| **medium** | + Objaverse, PartNet | ~50-60 GB | Broader diversity |
+| **large** | + ABC, Objaverse XL | ~500 GB+ | Full-scale training |
+
+Check dataset status: `./scripts/check_datasets.sh`
 
 ## Project Structure
 

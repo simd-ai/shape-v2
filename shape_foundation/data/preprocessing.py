@@ -62,35 +62,57 @@ class MeshPreprocessor:
     ) -> np.ndarray:
         """Estimate mean curvature via Laplacian-Beltrami approximation.
 
-        Uses cotangent weights for a discrete Laplacian, then
-        curvature ~ |Δx| / 2 per vertex.
+        Fully vectorized — no Python loops. For each triangle we compute
+        cotangent weights at all three corners at once and scatter them
+        into the sparse Laplacian.
         """
         from scipy.sparse import coo_matrix
 
         V = vertices.shape[0]
+        F = faces.shape[0]
+        if F == 0:
+            return np.zeros(V, dtype=np.float32)
 
-        # build adjacency with cotangent weights
-        rows, cols, weights = [], [], []
-        for tri in faces:
-            for local_i in range(3):
-                i = tri[local_i]
-                j = tri[(local_i + 1) % 3]
-                k = tri[(local_i + 2) % 3]
+        v0 = vertices[faces[:, 0]]  # (F, 3)
+        v1 = vertices[faces[:, 1]]
+        v2 = vertices[faces[:, 2]]
 
-                eij = vertices[j] - vertices[i]
-                eik = vertices[k] - vertices[i]
+        # For each triangle, compute cotangent of each angle
+        # cot at vertex 0 is the weight of edge (1, 2)
+        def cot(a, b, c):
+            # angle at vertex a between edges ab and ac
+            ab = b - a
+            ac = c - a
+            # cot = (ab . ac) / |ab x ac|
+            dot = np.einsum("ij,ij->i", ab, ac)
+            cross = np.cross(ab, ac)
+            norm = np.linalg.norm(cross, axis=-1) + 1e-12
+            return dot / norm
 
-                cos_a = np.dot(eij, eik) / (np.linalg.norm(eij) * np.linalg.norm(eik) + 1e-12)
-                cos_a = np.clip(cos_a, -1, 1)
-                sin_a = np.sqrt(1 - cos_a ** 2) + 1e-12
-                cot_a = cos_a / sin_a
+        cot0 = cot(v0, v1, v2)  # weight for edge (1, 2)
+        cot1 = cot(v1, v2, v0)  # weight for edge (2, 0)
+        cot2 = cot(v2, v0, v1)  # weight for edge (0, 1)
 
-                rows.extend([j, k])
-                cols.extend([k, j])
-                weights.extend([cot_a / 2, cot_a / 2])
+        # Build rows, cols, weights vectors
+        rows = np.concatenate([
+            faces[:, 1], faces[:, 2],  # edge (1,2) contributions
+            faces[:, 2], faces[:, 0],  # edge (2,0)
+            faces[:, 0], faces[:, 1],  # edge (0,1)
+        ])
+        cols = np.concatenate([
+            faces[:, 2], faces[:, 1],
+            faces[:, 0], faces[:, 2],
+            faces[:, 1], faces[:, 0],
+        ])
+        weights = np.concatenate([
+            cot0 / 2, cot0 / 2,
+            cot1 / 2, cot1 / 2,
+            cot2 / 2, cot2 / 2,
+        ])
 
         L = coo_matrix((weights, (rows, cols)), shape=(V, V)).tocsr()
         diag = np.array(L.sum(axis=1)).flatten()
+        # Laplacian = D - L (where D is diagonal of row sums)
         L_diag = coo_matrix((diag, (np.arange(V), np.arange(V))), shape=(V, V)).tocsr()
         laplacian = L_diag - L
 

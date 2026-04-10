@@ -36,12 +36,18 @@ train:
 
 data:
   sources:
-    - name: abc
-      weight: 1.0
-    - name: objaverse
-      max_samples: 100000
-      weight: 0.3
     - name: thingi10k
-      weight: 0.2
-    # - name: shapenet  # requires access approval — re-enable when available
-    #   weight: 0.5
+      root: data_cache/thingi10k/thingi10k
+      weight: 1.0
+    - name: mfcad
+      root: data_cache/mfcad/mfcad
+      weight: 1.0
+    - name: fusion360
+      root: data_cache/fusion360/fusion360
+      weight: 0.5
+    - name: objaverse
+      root: data_cache/objaverse/objaverse
+      weight: 0.3
+    - name: partnet
+      root: data_cache/partnet/partnet
+      weight: 0.3

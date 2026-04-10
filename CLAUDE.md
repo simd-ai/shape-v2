@@ -9,14 +9,25 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Commands
 
 ```bash
-# Install (requires CUDA 12.4)
+# Install (requires CUDA 12.4+)
 pip install torch --index-url https://download.pytorch.org/whl/cu124
+pip install torch-geometric torch-cluster torch-scatter -f https://data.pyg.org/whl/torch-2.6.0+cu124.html
 pip install -e .
 
 # Dev dependencies
 pip install -e ".[dev]"
 
-# Generate synthetic training data
+# Download datasets
+#   small  = thingi10k, mfcad, fusion360 (~10-15 GB preprocessed)
+#   medium = thingi10k, objaverse, mfcad, fusion360, partnet (~50-60 GB)
+#   large  = abc, objaverse, objaverse_xl, thingi10k, partnet, fusion360, mfcad (~500 GB+)
+./scripts/download_datasets.sh small
+# Override ABC chunk count (large only): ABC_CHUNKS=20 ./scripts/download_datasets.sh large
+
+# Preprocess raw meshes into .pt files
+python -m shape_foundation.scripts.prepare_dataset --source abc --root data_raw/abc --output data_cache/abc
+
+# Generate synthetic training data (no download needed)
 python -m shape_foundation.scripts.prepare_dataset --generate-synthetic --n-per-type 500
 
 # Smoke test (tiny model, verifies setup)
@@ -33,15 +44,18 @@ torchrun --nproc_per_node=4 -m shape_foundation.scripts.train_pretrain --config 
 python -m shape_foundation.scripts.train_finetune --pretrained checkpoints/checkpoint_final.pt --config configs/medium.yaml
 
 # Evaluate
-python -m shape_foundation.scripts.eval_backbone --checkpoint checkpoints/checkpoint_final.pt --config configs/medium.yaml
+python -m shape_foundation.scripts.eval_backbone --checkpoint checkpoints/checkpoint_final.pt --config configs/medium.yaml --output eval_results.json
 
 # Inference on a single mesh
 python -m shape_foundation.scripts.infer_mesh --checkpoint checkpoints/checkpoint_final.pt --mesh path/to/mesh.stl
 
+# TensorBoard
+tensorboard --logdir runs/
+
 # Lint
 ruff check shape_foundation/
 
-# Tests
+# Tests (no test files exist yet; smoke tests via training pipeline)
 pytest
 ```
 
@@ -62,6 +76,10 @@ pytest
   - `TopologyReductionHead` — simulation reduction recommendation (pooled)
 
 - **GAOTBackbone** (`models/gaot_backbone.py`): Orchestrates the pipeline. Three forward modes: `forward_tokens` (raw embeddings), `forward_features` (+ head outputs), `forward_tasks` (full inference).
+
+- **Task Modules** (`tasks/`): High-level wrappers that use head outputs for end-to-end inference: `SymmetryDetector` (plane/axis extraction), `PrimitiveDetector` (per-token classification), `GeometryCaptioner` (template-based descriptions), `ReductionRecommender` (aggregates all predictions into structured JSON output).
+
+- **Loss Functions** (`training/losses.py`): Self-supervised losses (masked token prediction, contrastive multi-resolution consistency, inpainting) for pretraining; supervised losses (symmetry, primitive, part, reduction, text-alignment) for fine-tuning.
 
 ## Configuration System
 

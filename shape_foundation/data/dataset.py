@@ -61,7 +61,7 @@ class MeshDataset(Dataset):
                 samples.append({"path": str(f), "format": "pt", "source": src.name})
         else:
             # look for mesh files
-            mesh_exts = ("*.obj", "*.stl", "*.ply", "*.off", "*.msh", "*.step", "*.stp")
+            mesh_exts = ("*.obj", "*.stl", "*.ply", "*.off", "*.msh", "*.step", "*.stp", "*.glb", "*.gltf")
             for ext in mesh_exts:
                 for f in sorted(root.glob(f"**/{ext}")):
                     samples.append({"path": str(f), "format": "mesh", "source": src.name})

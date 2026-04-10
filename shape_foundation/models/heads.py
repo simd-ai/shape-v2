@@ -270,6 +270,7 @@ class CaptionHead(nn.Module):
                 num_layers=2,
             )
             self.output_proj = nn.Linear(h, cfg.vocab_size)
+            self.mem_proj = nn.Linear(emb_dim, h)
         elif cfg.mode == "retrieval":
             self.bank_proj = nn.Linear(emb_dim, h)
         else:
@@ -292,9 +293,7 @@ class CaptionHead(nn.Module):
                 tgt = self.token_embed(target_tokens)  # (B, L, h)
                 memory = pooled.unsqueeze(1)  # (B, 1, emb_dim) - project
                 # simple: project memory to decoder dim
-                if not hasattr(self, "_mem_proj"):
-                    self._mem_proj = nn.Linear(pooled.shape[-1], tgt.shape[-1]).to(pooled.device)
-                memory = self._mem_proj(memory)
+                memory = self.mem_proj(memory)
                 causal_mask = nn.Transformer.generate_square_subsequent_mask(L, device=tgt.device)
                 dec_out = self.decoder(tgt, memory, tgt_mask=causal_mask)
                 result["token_logits"] = self.output_proj(dec_out)  # (B, L, vocab)

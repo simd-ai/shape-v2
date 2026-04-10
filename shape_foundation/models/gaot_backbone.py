@@ -26,11 +26,52 @@ from shape_foundation.models.heads import (
 )
 
 
+# ---------------------------------------------------------------------------
+# Attention pooling
+# ---------------------------------------------------------------------------
+
+class AttentionPooling(nn.Module):
+    """Learned attention pooling over token sequence.
+
+    Computes scalar attention logits per token, softmax-weights tokens,
+    and returns the weighted sum projected to emb_dim.
+    """
+
+    def __init__(self, token_dim: int, emb_dim: int):
+        super().__init__()
+        self.score = nn.Sequential(
+            nn.LayerNorm(token_dim),
+            nn.Linear(token_dim, 1),
+        )
+        self.proj = nn.Sequential(
+            nn.LayerNorm(token_dim),
+            nn.Linear(token_dim, emb_dim),
+        )
+
+    def forward(self, token_embeddings: torch.Tensor) -> torch.Tensor:
+        """
+        Args:
+            token_embeddings: (B, T, C)
+        Returns:
+            pooled: (B, emb_dim)
+        """
+        # (B, T, 1) -> softmax over T
+        attn_logits = self.score(token_embeddings)
+        attn_weights = F.softmax(attn_logits, dim=1)  # (B, T, 1)
+        # weighted sum
+        pooled = (token_embeddings * attn_weights).sum(dim=1)  # (B, C)
+        return self.proj(pooled)
+
+
+# ---------------------------------------------------------------------------
+# Backbone
+# ---------------------------------------------------------------------------
+
 class GAOTBackbone(nn.Module):
     """Geometry-Aware Operator Transformer backbone.
 
     Architecture:
-        MAGNO Encoder -> Transformer Processor -> Task Heads
+        MAGNO Encoder -> (optional token pos enc) -> Transformer Processor -> Task Heads
 
     Forward modes:
         forward_tokens: raw token + pooled embeddings
@@ -55,11 +96,21 @@ class GAOTBackbone(nn.Module):
         token_dim = cfg.tokenizer.latent.token_dim
         emb_dim = cfg.heads.embedding_dim
 
-        # Pooling projection
-        self.pool_proj = nn.Sequential(
-            nn.LayerNorm(token_dim),
-            nn.Linear(token_dim, emb_dim),
-        )
+        # Optional token-level positional encoding from latent grid 3D coords
+        self.token_pos_proj = None
+        if cfg.tokenizer.token_pos_encoding:
+            self.token_pos_proj = nn.Linear(3, token_dim)
+
+        # Pooling: mean or learned attention
+        self.pooling_mode = cfg.heads.pooling
+        if self.pooling_mode == "attention":
+            self.pool = AttentionPooling(token_dim, emb_dim)
+        else:
+            # mean pooling with projection
+            self.pool = nn.Sequential(
+                nn.LayerNorm(token_dim),
+                nn.Linear(token_dim, emb_dim),
+            )
 
         # Task heads
         self.heads = nn.ModuleDict()
@@ -83,20 +134,31 @@ class GAOTBackbone(nn.Module):
         normals: torch.Tensor | None = None,
         curvature: torch.Tensor | None = None,
     ) -> dict[str, torch.Tensor]:
-        enc_out = self.encoder(points, features, normals, curvature)
-        return enc_out
+        return self.encoder(points, features, normals, curvature)
+
+    def _add_token_pos(self, token_embeddings: torch.Tensor, enc_out: dict) -> torch.Tensor:
+        """Add latent grid positional encoding to token embeddings if enabled."""
+        if self.token_pos_proj is not None and "grid_positions" in enc_out:
+            grid_pos = enc_out["grid_positions"]  # (T, 3)
+            B = token_embeddings.shape[0]
+            # broadcast grid positions across batch
+            pos_enc = self.token_pos_proj(grid_pos)  # (T, C)
+            token_embeddings = token_embeddings + pos_enc.unsqueeze(0).expand(B, -1, -1)
+        return token_embeddings
 
     def _process(
         self,
         token_embeddings: torch.Tensor,
         mask: torch.Tensor | None = None,
     ) -> dict[str, torch.Tensor]:
-        proc_out = self.processor(token_embeddings, mask)
-        return proc_out
+        return self.processor(token_embeddings, mask)
 
     def _pool(self, token_embeddings: torch.Tensor) -> torch.Tensor:
-        pooled = token_embeddings.mean(dim=1)  # (B, C)
-        return self.pool_proj(pooled)  # (B, emb_dim)
+        if self.pooling_mode == "attention":
+            return self.pool(token_embeddings)
+        else:
+            pooled = token_embeddings.mean(dim=1)
+            return self.pool(pooled)
 
     def forward_tokens(
         self,
@@ -106,16 +168,10 @@ class GAOTBackbone(nn.Module):
         curvature: torch.Tensor | None = None,
         mask: torch.Tensor | None = None,
     ) -> dict[str, torch.Tensor]:
-        """Encode + process, return raw token and pooled embeddings.
-
-        Returns:
-            token_embeddings: (B, T, C) processed latent tokens
-            pooled_embedding: (B, emb_dim) global geometry embedding
-            raw_geo_stats: (B, T, raw_dim) optional pre-MLP geometry statistics
-            pyramid: list of intermediate layer outputs
-        """
+        """Encode + process, return raw token and pooled embeddings."""
         enc = self._encode(points, features, normals, curvature)
-        proc = self._process(enc["token_embeddings"], mask)
+        tokens = self._add_token_pos(enc["token_embeddings"], enc)
+        proc = self._process(tokens, mask)
         pooled = self._pool(proc["token_embeddings"])
 
         result = {
@@ -135,11 +191,7 @@ class GAOTBackbone(nn.Module):
         curvature: torch.Tensor | None = None,
         mask: torch.Tensor | None = None,
     ) -> dict[str, Any]:
-        """Like forward_tokens but also runs task heads.
-
-        Returns everything from forward_tokens plus head outputs keyed
-        by head name.
-        """
+        """Like forward_tokens but also runs task heads."""
         backbone_out = self.forward_tokens(points, features, normals, curvature, mask)
         token_emb = backbone_out["token_embeddings"]
         pooled = backbone_out["pooled_embedding"]
