@@ -1,0 +1,122 @@
+Model: 10,913,297 params (10,913,297 trainable)
+Device: cuda:0  AMP: bf16  DDP: True
+  GPU 0: NVIDIA H100 80GB HBM3 (85 GB)
+  GPU 1: NVIDIA H100 80GB HBM3 (85 GB)
+  GPU 2: NVIDIA H100 80GB HBM3 (85 GB)
+  GPU 3: NVIDIA H100 80GB HBM3 (85 GB)
+  GPU 4: NVIDIA H100 80GB HBM3 (85 GB)
+  GPU 5: NVIDIA H100 80GB HBM3 (85 GB)
+  GPU 6: NVIDIA H100 80GB HBM3 (85 GB)
+  GPU 7: NVIDIA H100 80GB HBM3 (85 GB)
+Training: 477 batches/epoch, 50 epochs
+DDP: 8 processes
+Epoch 0: 100%|████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████| 477/477 [02:41<00:00,  2.96it/s, loss=756.3010]
+Epoch 0 train_epoch/contrastive_raw=1.6250, train_epoch/contrastive_weighted=0.3250, train_epoch/masked_token_raw=22627.2607, train_epoch/masked_token_weighted=22627.2607, train_epoch/reduction_raw=1.3893, train_epoch/reduction_weighted=1.3893, train_epoch/symmetry_raw=1.0019, train_epoch/symmetry_weighted=1.0019, train_epoch/total=22629.9765
+Epoch 1: 100%|███████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████| 477/477 [02:38<00:00,  3.00it/s, loss=2510.4409]
+Epoch 1 train_epoch/contrastive_raw=1.0560, train_epoch/contrastive_weighted=0.2112, train_epoch/masked_token_raw=13301.4673, train_epoch/masked_token_weighted=13301.4673, train_epoch/reduction_raw=1.2713, train_epoch/reduction_weighted=1.2713, train_epoch/symmetry_raw=0.8810, train_epoch/symmetry_weighted=0.8810, train_epoch/total=13303.8309
+Epoch 2: 100%|█████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████| 477/477 [02:39<00:00,  2.99it/s, loss=471731.9375]
+Epoch 2 train_epoch/contrastive_raw=0.1403, train_epoch/contrastive_weighted=0.0281, train_epoch/masked_token_raw=11657.6835, train_epoch/masked_token_weighted=11657.6835, train_epoch/reduction_raw=1.1571, train_epoch/reduction_weighted=1.1571, train_epoch/symmetry_raw=0.7582, train_epoch/symmetry_weighted=0.7582, train_epoch/total=11659.6267
+Epoch 3: 100%|████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████| 477/477 [02:39<00:00,  3.00it/s, loss=125.4745]
+Epoch 3 train_epoch/contrastive_raw=0.1190, train_epoch/contrastive_weighted=0.0238, train_epoch/masked_token_raw=14802.1448, train_epoch/masked_token_weighted=14802.1448, train_epoch/reduction_raw=1.1157, train_epoch/reduction_weighted=1.1157, train_epoch/symmetry_raw=0.7271, train_epoch/symmetry_weighted=0.7271, train_epoch/total=14804.0116
+Epoch 4: 100%|████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████| 477/477 [02:38<00:00,  3.00it/s, loss=210.4301]
+Epoch 4 train_epoch/contrastive_raw=0.1414, train_epoch/contrastive_weighted=0.0283, train_epoch/masked_token_raw=24569.9288, train_epoch/masked_token_weighted=24569.9288, train_epoch/reduction_raw=1.1425, train_epoch/reduction_weighted=1.1425, train_epoch/symmetry_raw=0.7554, train_epoch/symmetry_weighted=0.7554, train_epoch/total=24571.8549
+Epoch 5: 100%|█████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████| 477/477 [02:38<00:00,  3.00it/s, loss=62.0225]
+Epoch 5 train_epoch/contrastive_raw=0.2020, train_epoch/contrastive_weighted=0.0404, train_epoch/masked_token_raw=18665.5573, train_epoch/masked_token_weighted=18665.5573, train_epoch/reduction_raw=1.1779, train_epoch/reduction_weighted=1.1779, train_epoch/symmetry_raw=0.8007, train_epoch/symmetry_weighted=0.8007, train_epoch/total=18667.5764
+Epoch 6: 100%|█████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████| 477/477 [02:38<00:00,  3.01it/s, loss=311379.0938]
+Epoch 6 train_epoch/contrastive_raw=0.4274, train_epoch/contrastive_weighted=0.0855, train_epoch/masked_token_raw=13749.3334, train_epoch/masked_token_weighted=13749.3334, train_epoch/reduction_raw=1.2389, train_epoch/reduction_weighted=1.2389, train_epoch/symmetry_raw=0.8705, train_epoch/symmetry_weighted=0.8705, train_epoch/total=13751.5283
+Epoch 7: 100%|█████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████| 477/477 [02:38<00:00,  3.00it/s, loss=28.0414]
+Epoch 7 train_epoch/contrastive_raw=0.4633, train_epoch/contrastive_weighted=0.0927, train_epoch/masked_token_raw=6460.0694, train_epoch/masked_token_weighted=6460.0694, train_epoch/reduction_raw=1.2426, train_epoch/reduction_weighted=1.2426, train_epoch/symmetry_raw=0.8986, train_epoch/symmetry_weighted=0.8986, train_epoch/total=6462.3033
+Epoch 8: 100%|████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████| 477/477 [02:39<00:00,  2.99it/s, loss=116.3782]
+Saved checkpoint: /data/shape-v2/checkpoints/checkpoint_step_2000.pt
+Epoch 8 train_epoch/contrastive_raw=0.5396, train_epoch/contrastive_weighted=0.1079, train_epoch/masked_token_raw=8934.8889, train_epoch/masked_token_weighted=8934.8889, train_epoch/reduction_raw=1.2747, train_epoch/reduction_weighted=1.2747, train_epoch/symmetry_raw=0.9306, train_epoch/symmetry_weighted=0.9306, train_epoch/total=8937.2022
+Epoch 9: 100%|████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████| 477/477 [02:39<00:00,  3.00it/s, loss=152.3829]
+Epoch 9 train_epoch/contrastive_raw=0.4351, train_epoch/contrastive_weighted=0.0870, train_epoch/masked_token_raw=5333.4122, train_epoch/masked_token_weighted=5333.4122, train_epoch/reduction_raw=1.2570, train_epoch/reduction_weighted=1.2570, train_epoch/symmetry_raw=0.9071, train_epoch/symmetry_weighted=0.9071, train_epoch/total=5335.6633
+Epoch 10: 100%|████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████| 477/477 [02:38<00:00,  3.01it/s, loss=60.7153]
+Epoch 10 train_epoch/contrastive_raw=0.4108, train_epoch/contrastive_weighted=0.0822, train_epoch/masked_token_raw=7143.0100, train_epoch/masked_token_weighted=7143.0100, train_epoch/reduction_raw=1.2563, train_epoch/reduction_weighted=1.2563, train_epoch/symmetry_raw=0.9253, train_epoch/symmetry_weighted=0.9253, train_epoch/total=7145.2739
+Epoch 11: 100%|████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████| 477/477 [02:39<00:00,  2.99it/s, loss=10.0385]
+Epoch 11 train_epoch/contrastive_raw=0.3615, train_epoch/contrastive_weighted=0.0723, train_epoch/masked_token_raw=10594.0696, train_epoch/masked_token_weighted=10594.0696, train_epoch/reduction_raw=1.2269, train_epoch/reduction_weighted=1.2269, train_epoch/symmetry_raw=0.8582, train_epoch/symmetry_weighted=0.8582, train_epoch/total=10596.2267
+Epoch 12: 100%|████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████| 477/477 [02:38<00:00,  3.01it/s, loss=11.6106]
+Epoch 12 train_epoch/contrastive_raw=0.2514, train_epoch/contrastive_weighted=0.0503, train_epoch/masked_token_raw=2560.0792, train_epoch/masked_token_weighted=2560.0792, train_epoch/reduction_raw=1.2116, train_epoch/reduction_weighted=1.2116, train_epoch/symmetry_raw=0.8269, train_epoch/symmetry_weighted=0.8269, train_epoch/total=2562.1679
+Epoch 13: 100%|████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████| 477/477 [02:39<00:00,  3.00it/s, loss=12.0973]
+Epoch 13 train_epoch/contrastive_raw=0.2967, train_epoch/contrastive_weighted=0.0593, train_epoch/masked_token_raw=4556.1975, train_epoch/masked_token_weighted=4556.1975, train_epoch/reduction_raw=1.2107, train_epoch/reduction_weighted=1.2107, train_epoch/symmetry_raw=0.8473, train_epoch/symmetry_weighted=0.8473, train_epoch/total=4558.3148
+Epoch 14: 100%|█████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████| 477/477 [02:39<00:00,  3.00it/s, loss=6.9879]
+Epoch 14 train_epoch/contrastive_raw=0.2303, train_epoch/contrastive_weighted=0.0461, train_epoch/masked_token_raw=6198.2363, train_epoch/masked_token_weighted=6198.2363, train_epoch/reduction_raw=1.2050, train_epoch/reduction_weighted=1.2050, train_epoch/symmetry_raw=0.8298, train_epoch/symmetry_weighted=0.8298, train_epoch/total=6200.3172
+Epoch 15: 100%|████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████| 477/477 [02:38<00:00,  3.00it/s, loss=56.2828]
+Epoch 15 train_epoch/contrastive_raw=0.1528, train_epoch/contrastive_weighted=0.0306, train_epoch/masked_token_raw=5513.4218, train_epoch/masked_token_weighted=5513.4218, train_epoch/reduction_raw=1.1660, train_epoch/reduction_weighted=1.1660, train_epoch/symmetry_raw=0.8096, train_epoch/symmetry_weighted=0.8096, train_epoch/total=5515.4281
+Epoch 16: 100%|██████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████| 477/477 [02:39<00:00,  3.00it/s, loss=1366.6567]
+Saved checkpoint: /data/shape-v2/checkpoints/checkpoint_step_4000.pt
+Epoch 16 train_epoch/contrastive_raw=0.2523, train_epoch/contrastive_weighted=0.0505, train_epoch/masked_token_raw=5656.5474, train_epoch/masked_token_weighted=5656.5474, train_epoch/reduction_raw=1.2010, train_epoch/reduction_weighted=1.2010, train_epoch/symmetry_raw=0.8294, train_epoch/symmetry_weighted=0.8294, train_epoch/total=5658.6283
+Epoch 17: 100%|██████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████| 477/477 [02:39<00:00,  2.99it/s, loss=1402.8239]
+Epoch 17 train_epoch/contrastive_raw=0.1890, train_epoch/contrastive_weighted=0.0378, train_epoch/masked_token_raw=6522.8727, train_epoch/masked_token_weighted=6522.8727, train_epoch/reduction_raw=1.1718, train_epoch/reduction_weighted=1.1718, train_epoch/symmetry_raw=0.8196, train_epoch/symmetry_weighted=0.8196, train_epoch/total=6524.9019
+Epoch 18: 100%|█████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████| 477/477 [02:39<00:00,  3.00it/s, loss=4.0966]
+Epoch 18 train_epoch/contrastive_raw=0.1735, train_epoch/contrastive_weighted=0.0347, train_epoch/masked_token_raw=15072.6973, train_epoch/masked_token_weighted=15072.6973, train_epoch/reduction_raw=1.1566, train_epoch/reduction_weighted=1.1566, train_epoch/symmetry_raw=0.7908, train_epoch/symmetry_weighted=0.7908, train_epoch/total=15074.6797
+Epoch 19: 100%|█████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████| 477/477 [02:38<00:00,  3.01it/s, loss=3.7719]
+Epoch 19 train_epoch/contrastive_raw=0.1616, train_epoch/contrastive_weighted=0.0323, train_epoch/masked_token_raw=6665.7191, train_epoch/masked_token_weighted=6665.7191, train_epoch/reduction_raw=1.1316, train_epoch/reduction_weighted=1.1316, train_epoch/symmetry_raw=0.7720, train_epoch/symmetry_weighted=0.7720, train_epoch/total=6667.6550
+Epoch 20: 100%|█████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████| 477/477 [02:38<00:00,  3.00it/s, loss=5.8279]
+Epoch 20 train_epoch/contrastive_raw=0.1679, train_epoch/contrastive_weighted=0.0336, train_epoch/masked_token_raw=9507.4097, train_epoch/masked_token_weighted=9507.4097, train_epoch/reduction_raw=1.1398, train_epoch/reduction_weighted=1.1398, train_epoch/symmetry_raw=0.7884, train_epoch/symmetry_weighted=0.7884, train_epoch/total=9509.3712
+Epoch 21: 100%|█████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████| 477/477 [02:38<00:00,  3.01it/s, loss=5.3071]
+Epoch 21 train_epoch/contrastive_raw=0.1438, train_epoch/contrastive_weighted=0.0288, train_epoch/masked_token_raw=7132.1511, train_epoch/masked_token_weighted=7132.1511, train_epoch/reduction_raw=1.1293, train_epoch/reduction_weighted=1.1293, train_epoch/symmetry_raw=0.7600, train_epoch/symmetry_weighted=0.7600, train_epoch/total=7134.0691
+Epoch 22: 100%|█████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████| 477/477 [02:38<00:00,  3.00it/s, loss=4.1311]
+Epoch 22 train_epoch/contrastive_raw=0.1452, train_epoch/contrastive_weighted=0.0290, train_epoch/masked_token_raw=4374.1063, train_epoch/masked_token_weighted=4374.1063, train_epoch/reduction_raw=1.1301, train_epoch/reduction_weighted=1.1301, train_epoch/symmetry_raw=0.7490, train_epoch/symmetry_weighted=0.7490, train_epoch/total=4376.0144
+Epoch 23: 100%|█████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████| 477/477 [02:38<00:00,  3.00it/s, loss=3.0119]
+Epoch 23 train_epoch/contrastive_raw=0.1578, train_epoch/contrastive_weighted=0.0316, train_epoch/masked_token_raw=4122.3663, train_epoch/masked_token_weighted=4122.3663, train_epoch/reduction_raw=1.1236, train_epoch/reduction_weighted=1.1236, train_epoch/symmetry_raw=0.7524, train_epoch/symmetry_weighted=0.7524, train_epoch/total=4124.2737
+Epoch 24: 100%|█████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████| 477/477 [02:38<00:00,  3.00it/s, loss=2.9117]
+Epoch 24 train_epoch/contrastive_raw=0.1200, train_epoch/contrastive_weighted=0.0240, train_epoch/masked_token_raw=4041.6356, train_epoch/masked_token_weighted=4041.6356, train_epoch/reduction_raw=1.1132, train_epoch/reduction_weighted=1.1132, train_epoch/symmetry_raw=0.7384, train_epoch/symmetry_weighted=0.7384, train_epoch/total=4043.5111
+Epoch 25: 100%|████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████| 477/477 [02:38<00:00,  3.00it/s, loss=12.9663]
+Saved checkpoint: /data/shape-v2/checkpoints/checkpoint_step_6000.pt
+Epoch 25 train_epoch/contrastive_raw=0.1419, train_epoch/contrastive_weighted=0.0284, train_epoch/masked_token_raw=2924.2991, train_epoch/masked_token_weighted=2924.2991, train_epoch/reduction_raw=1.1075, train_epoch/reduction_weighted=1.1075, train_epoch/symmetry_raw=0.7503, train_epoch/symmetry_weighted=0.7503, train_epoch/total=2926.1853
+Epoch 26: 100%|█████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████| 477/477 [02:38<00:00,  3.00it/s, loss=2.9483]
+Epoch 26 train_epoch/contrastive_raw=0.1315, train_epoch/contrastive_weighted=0.0263, train_epoch/masked_token_raw=4192.9124, train_epoch/masked_token_weighted=4192.9124, train_epoch/reduction_raw=1.1308, train_epoch/reduction_weighted=1.1308, train_epoch/symmetry_raw=0.7541, train_epoch/symmetry_weighted=0.7541, train_epoch/total=4194.8236
+Epoch 27: 100%|█████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████| 477/477 [02:39<00:00,  3.00it/s, loss=4.6439]
+Epoch 27 train_epoch/contrastive_raw=0.1251, train_epoch/contrastive_weighted=0.0250, train_epoch/masked_token_raw=8195.1255, train_epoch/masked_token_weighted=8195.1255, train_epoch/reduction_raw=1.1017, train_epoch/reduction_weighted=1.1017, train_epoch/symmetry_raw=0.7450, train_epoch/symmetry_weighted=0.7450, train_epoch/total=8196.9973
+Epoch 28: 100%|█████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████| 477/477 [02:38<00:00,  3.00it/s, loss=3.5158]
+Epoch 28 train_epoch/contrastive_raw=0.1188, train_epoch/contrastive_weighted=0.0238, train_epoch/masked_token_raw=4322.3217, train_epoch/masked_token_weighted=4322.3217, train_epoch/reduction_raw=1.0904, train_epoch/reduction_weighted=1.0904, train_epoch/symmetry_raw=0.7256, train_epoch/symmetry_weighted=0.7256, train_epoch/total=4324.1614
+Epoch 29: 100%|█████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████| 477/477 [02:39<00:00,  2.99it/s, loss=2.8266]
+Epoch 29 train_epoch/contrastive_raw=0.1059, train_epoch/contrastive_weighted=0.0212, train_epoch/masked_token_raw=5521.5621, train_epoch/masked_token_weighted=5521.5621, train_epoch/reduction_raw=1.0839, train_epoch/reduction_weighted=1.0839, train_epoch/symmetry_raw=0.7229, train_epoch/symmetry_weighted=0.7229, train_epoch/total=5523.3899
+Epoch 30: 100%|█████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████| 477/477 [02:38<00:00,  3.01it/s, loss=3.0295]
+Epoch 30 train_epoch/contrastive_raw=0.1165, train_epoch/contrastive_weighted=0.0233, train_epoch/masked_token_raw=4430.7219, train_epoch/masked_token_weighted=4430.7219, train_epoch/reduction_raw=1.0881, train_epoch/reduction_weighted=1.0881, train_epoch/symmetry_raw=0.7390, train_epoch/symmetry_weighted=0.7390, train_epoch/total=4432.5723
+Epoch 31: 100%|█████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████| 477/477 [02:39<00:00,  3.00it/s, loss=3.4676]
+Epoch 31 train_epoch/contrastive_raw=0.0975, train_epoch/contrastive_weighted=0.0195, train_epoch/masked_token_raw=3073.5121, train_epoch/masked_token_weighted=3073.5121, train_epoch/reduction_raw=1.0662, train_epoch/reduction_weighted=1.0662, train_epoch/symmetry_raw=0.7020, train_epoch/symmetry_weighted=0.7020, train_epoch/total=3075.2997
+Epoch 32:  63%|████████████████████████████████████████████████████████████████████████████                                             | 300/477 [01:40<00:59,  2.97it/s, loss=88310.3047]
+Traceback (most recent call last):
+  File "<frozen runpy>", line 198, in _run_module_as_main
+  File "<frozen runpy>", line 88, in _run_code
+  File "/home/nvidia/shape-v2/shape_foundation/scripts/train_pretrain.py", line 161, in <module>
+    main()
+  File "/home/nvidia/shape-v2/shape_foundation/scripts/train_pretrain.py", line 151, in main
+    trainer.train()
+  File "/home/nvidia/shape-v2/shape_foundation/training/trainer.py", line 552, in train
+    data is touched — so validation statistics cannot leak into the
+                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/nvidia/shape-v2/shape_foundation/training/trainer.py", line 444, in train_epoch
+    self.scaler.scale(loss).backward()
+    ^^^^^^^^^^^^^^^
+  File "/home/nvidia/shape-v2/venv/lib/python3.12/site-packages/torch/_tensor.py", line 626, in backward
+    torch.autograd.backward(
+  File "/home/nvidia/shape-v2/venv/lib/python3.12/site-packages/torch/autograd/__init__.py", line 347, in backward
+    _engine_run_backward(
+  File "/home/nvidia/shape-v2/venv/lib/python3.12/site-packages/torch/autograd/graph.py", line 823, in _engine_run_backward
+    return Variable._execution_engine.run_backward(  # Calls into the C++ engine to run the backward pass
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+KeyboardInterrupt
+[rank0]: Traceback (most recent call last):
+[rank0]:   File "<frozen runpy>", line 198, in _run_module_as_main
+[rank0]:   File "<frozen runpy>", line 88, in _run_code
+[rank0]:   File "/home/nvidia/shape-v2/shape_foundation/scripts/train_pretrain.py", line 161, in <module>
+[rank0]:     main()
+[rank0]:   File "/home/nvidia/shape-v2/shape_foundation/scripts/train_pretrain.py", line 151, in main
+[rank0]:     trainer.train()
+[rank0]:   File "/home/nvidia/shape-v2/shape_foundation/training/trainer.py", line 552, in train
+[rank0]:     data is touched — so validation statistics cannot leak into the
+[rank0]:                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank0]:   File "/home/nvidia/shape-v2/shape_foundation/training/trainer.py", line 444, in train_epoch
+[rank0]:     self.scaler.scale(loss).backward()
+[rank0]:     ^^^^^^^^^^^^^^^
+[rank0]:   File "/home/nvidia/shape-v2/venv/lib/python3.12/site-packages/torch/_tensor.py", line 626, in backward
+[rank0]:     torch.autograd.backward(
+[rank0]:   File "/home/nvidia/shape-v2/venv/lib/python3.12/site-packages/torch/autograd/__init__.py", line 347, in backward
+[rank0]:     _engine_run_backward(
+[rank0]:   File "/home/nvidia/shape-v2/venv/lib/python3.12/site-packages/torch/autograd/graph.py", line 823, in _engine_run_backward
+[rank0]:     return Variable._execution_engine.run_backward(  # Calls into the C++ engine to run the backward pass
+[rank0]:            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank0]: KeyboardInterrupt

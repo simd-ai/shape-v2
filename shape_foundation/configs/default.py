@@ -168,7 +168,11 @@ class HeadsConfig:
 @dc.dataclass
 class MaskedTokenLossConfig:
     enabled: bool = True
-    mask_ratio: float = 0.25
+    # 0.5 forces the model to reconstruct from distant context rather than
+    # local neighbors (which are too informative at 0.25). MAE uses 0.75 in
+    # 2D — we stay at 0.5 for 3D because each latent-grid neighbor carries
+    # less context than a 2D image patch.
+    mask_ratio: float = 0.5
     mask_strategy: str = "random"  # random | block | hybrid | spatial_3d
     block_size: int = 4
     target: str = "geo_stats"  # geo_stats | coordinates
@@ -179,6 +183,19 @@ class ContrastiveLossConfig:
     enabled: bool = True
     temperature: float = 0.07
     num_augmentations: int = 2
+    # When True (default, safer), the clean and augmented views are
+    # concatenated along the batch dim and run through a single DDP forward;
+    # outputs are split afterwards. Avoids two separate forward passes before
+    # a single backward, which is fragile with DDP + find_unused_parameters.
+    # Set False to fall back to the legacy two-forward path for comparison.
+    concat_forward: bool = True
+    # Augmentation strength for the second view. Previously hardcoded to
+    # jitter_std=0.005 and point_dropout=0.10, which made InfoNCE trivial —
+    # contrastive_raw collapsed to ~0.003 by epoch 15 and contributed no
+    # gradient afterwards. 0.02 / 0.30 keeps the two views meaningfully
+    # different for the full 50 epochs without losing the "same mesh" signal.
+    jitter_std: float = 0.02
+    point_dropout: float = 0.30
 
 
 @dc.dataclass
@@ -198,6 +215,36 @@ class SupervisedLossConfig:
 
 
 @dc.dataclass
+class RegressionLossConfig:
+    """Controls the regression-style loss used by geometry reconstruction
+    (masked-token, inpainting) and geometric regression (symmetry plane,
+    symmetry axis). Classification losses are unaffected.
+    """
+    kind: str = "smooth_l1"  # "mse" | "smooth_l1"
+    beta: float = 1.0        # SmoothL1 transition point; ignored for mse
+
+
+@dc.dataclass
+class ReconTargetNormConfig:
+    """Per-dimension normalization of raw_geo_stats reconstruction targets.
+
+    Computes (mean, std) per-dim from the training split only, over a pool
+    of training batches collected at the start of training, then normalizes
+    target = (target - mean) / (std + eps) before feeding into the
+    reconstruction loss (masked-token, inpainting). Only the target is
+    normalized — the predictor learns to output values in the normalized
+    space directly.
+
+    The computed stats are stored as registered buffers on LossComputer so
+    they round-trip through checkpoint save/load and are inspectable via
+    `trainer.loss_computer.recon_target_mean` / `.recon_target_std`.
+    """
+    enabled: bool = True
+    n_calib_batches: int = 32
+    eps: float = 1e-6
+
+
+@dc.dataclass
 class TextAlignLossConfig:
     enabled: bool = False
     temperature: float = 0.07
@@ -205,14 +252,21 @@ class TextAlignLossConfig:
 
 @dc.dataclass
 class LossWeightsConfig:
-    """Per-loss scalar weights applied before summing into total loss."""
+    """Per-loss scalar weights applied before summing into total loss.
+
+    Supervised defaults are 0.0 because the stock synthetic labels in
+    data/synthetic_labels.py are memorizable per-file and overfit
+    catastrophically (val CE ~2.5 vs train CE ~1e-4). Re-enable these
+    per-config only once you are training against labels that genuinely
+    generalize across unseen meshes.
+    """
     masked_token: float = 1.0
     contrastive: float = 0.2
     inpainting: float = 0.5
-    symmetry: float = 1.0
-    primitive: float = 1.0
-    part: float = 1.0
-    reduction: float = 1.0
+    symmetry: float = 0.0
+    primitive: float = 0.0
+    part: float = 0.0
+    reduction: float = 0.0
     text_align: float = 0.2
 
 
@@ -222,6 +276,8 @@ class LossConfig:
     contrastive: ContrastiveLossConfig = dc.field(default_factory=ContrastiveLossConfig)
     inpainting: InpaintingLossConfig = dc.field(default_factory=InpaintingLossConfig)
     supervised: SupervisedLossConfig = dc.field(default_factory=SupervisedLossConfig)
+    regression: RegressionLossConfig = dc.field(default_factory=RegressionLossConfig)
+    recon_target_norm: ReconTargetNormConfig = dc.field(default_factory=ReconTargetNormConfig)
     text_align: TextAlignLossConfig = dc.field(default_factory=TextAlignLossConfig)
     weights: LossWeightsConfig = dc.field(default_factory=LossWeightsConfig)
 
@@ -259,8 +315,11 @@ class TrainConfig:
     log_every: int = 50
     eval_every: int = 1000
     save_every: int = 2000
+    # Heavy outputs default to /data/... to avoid filling the root disk.
+    # Both paths can be overridden per-run from YAML (train.checkpoint_dir,
+    # train.log_dir) or via the SHAPE_CHECKPOINT_DIR / SHAPE_LOG_DIR env vars.
     checkpoint_dir: str = "/data/shape-v2/checkpoints"
-    log_dir: str = "runs"
+    log_dir: str = "/data/shape-v2/runs"
     optimizer: OptimizerConfig = dc.field(default_factory=OptimizerConfig)
     loss: LossConfig = dc.field(default_factory=LossConfig)
     wandb: WandbConfig = dc.field(default_factory=WandbConfig)
@@ -296,6 +355,11 @@ class DataConfig:
         default_factory=lambda: [DatasetSourceConfig(name="abc")]
     )
     cache_dir: str = "data_cache"
+    # Deterministic hash-based train/val split applied to every source when > 0.
+    # Each sample is assigned to val iff md5(path) % 10000 < val_fraction*10000,
+    # so the same file always ends up in the same split across runs/ranks.
+    # Set to 0.0 to opt out and fall back to the per-source `split:` field.
+    val_fraction: float = 0.05
     synthetic_labels: SyntheticLabelConfig = dc.field(default_factory=SyntheticLabelConfig)
 
 

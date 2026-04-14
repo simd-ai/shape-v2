@@ -17,3 +17,8 @@ config: {'input': {'mode': 'surface_sampled_points', 'num_surface_points': 4096,
 2026-04-10 06:31:58,657 INFO    MainThread:3086622 [wandb_run.py:_redirect():2442] Wrapping output streams.
 2026-04-10 06:31:58,657 INFO    MainThread:3086622 [wandb_run.py:_redirect():2465] Redirects installed.
 2026-04-10 06:31:58,659 INFO    MainThread:3086622 [wandb_init.py:init():1082] run started, returning control to user process
+2026-04-10 12:41:24,882 INFO    MainThread:3086622 [wandb_run.py:_finish():2291] finishing run notelink/shape-foundation/bkhriovz
+2026-04-10 12:41:24,883 INFO    MainThread:3086622 [wandb_run.py:_atexit_cleanup():2490] got exitcode: 0
+2026-04-10 12:41:24,883 INFO    MainThread:3086622 [wandb_run.py:_restore():2472] restore
+2026-04-10 12:41:24,883 INFO    MainThread:3086622 [wandb_run.py:_restore():2478] restore done
+2026-04-10 12:41:26,161 INFO    MainThread:3086622 [wandb_run.py:_footer_sync_info():3868] logging synced files

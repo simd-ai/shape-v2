@@ -15,7 +15,51 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from shape_foundation.configs.default import LossConfig
+from shape_foundation.configs.default import GeoEmbedConfig, LossConfig
+
+
+def regression_loss(
+    predicted: torch.Tensor,
+    target: torch.Tensor,
+    kind: str,
+    beta: float,
+) -> torch.Tensor:
+    """Dispatch between MSE and SmoothL1 for geometry regression losses.
+
+    Single source of truth used by MaskedTokenLoss, PartialInpaintingLoss,
+    and the symmetry plane/axis regression terms. Both branches use the
+    default `reduction='mean'` so the returned scalar is consistent with
+    the per-step / epoch-average logging pipeline.
+
+    Args:
+        kind:  "mse" | "smooth_l1"
+        beta:  SmoothL1 transition point (ignored when kind == "mse")
+    """
+    if kind == "mse":
+        return F.mse_loss(predicted, target)
+    if kind == "smooth_l1":
+        return F.smooth_l1_loss(predicted, target, beta=beta)
+    raise ValueError(
+        f"Unknown regression loss kind: {kind!r}. Expected 'mse' or 'smooth_l1'."
+    )
+
+
+def compute_raw_geo_stats_dim(geo_cfg: GeoEmbedConfig) -> int:
+    """Compute the per-token raw_geo_stats dimension the encoder will emit.
+
+    Must stay in sync with `GeoEmbed.__init__` in
+    `shape_foundation/models/tokenizer_magno.py`: relative positions
+    contribute 3 dims per stat, optional normals add 3 per stat, optional
+    curvature adds 1 per stat. Used by LossComputer to build the
+    reconstruction projection head eagerly (before optimizer construction).
+    """
+    n_stats = len(geo_cfg.stat_features)
+    dim = n_stats * 3
+    if geo_cfg.augment_normals:
+        dim += n_stats * 3
+    if geo_cfg.augment_curvature:
+        dim += n_stats * 1
+    return dim
 
 
 # ---------------------------------------------------------------------------
@@ -35,6 +79,8 @@ class MaskedTokenLoss(nn.Module):
         self.mask_ratio = cfg.masked_token.mask_ratio
         self.mask_strategy = cfg.masked_token.mask_strategy
         self.block_size = cfg.masked_token.block_size
+        self.reg_kind = cfg.regression.kind
+        self.reg_beta = cfg.regression.beta
         self._grid_shape: tuple[int, int, int] | None = None
 
     def set_grid_shape(self, grid_shape: tuple[int, int, int]) -> None:
@@ -117,10 +163,12 @@ class MaskedTokenLoss(nn.Module):
         target: torch.Tensor,     # (B, T, D) geo stats from encoder
         mask: torch.Tensor,       # (B, T) bool
     ) -> torch.Tensor:
-        """MSE loss at masked positions only."""
+        """Regression loss at masked positions only (kind from cfg.regression)."""
         if mask.sum() == 0:
             return torch.tensor(0.0, device=predicted.device)
-        return F.mse_loss(predicted[mask], target[mask])
+        return regression_loss(
+            predicted[mask], target[mask], self.reg_kind, self.reg_beta,
+        )
 
 
 class MultiResContrastiveLoss(nn.Module):
@@ -150,6 +198,8 @@ class PartialInpaintingLoss(nn.Module):
         super().__init__()
         self.crop_ratio = cfg.inpainting.crop_ratio
         self.crop_strategy = cfg.inpainting.crop_strategy
+        self.reg_kind = cfg.regression.kind
+        self.reg_beta = cfg.regression.beta
         self._grid_shape: tuple[int, int, int] | None = None
 
     def set_grid_shape(self, grid_shape: tuple[int, int, int]) -> None:
@@ -199,7 +249,9 @@ class PartialInpaintingLoss(nn.Module):
     ) -> torch.Tensor:
         if mask.sum() == 0:
             return torch.tensor(0.0, device=predicted.device)
-        return F.mse_loss(predicted[mask], target[mask])
+        return regression_loss(
+            predicted[mask], target[mask], self.reg_kind, self.reg_beta,
+        )
 
 
 class SymmetryLoss(nn.Module):
@@ -208,23 +260,30 @@ class SymmetryLoss(nn.Module):
         self.cls_weight = cfg.supervised.symmetry_weight
         self.plane_weight = cfg.supervised.plane_regression_weight
         self.axis_weight = cfg.supervised.axis_regression_weight
+        self.reg_kind = cfg.regression.kind
+        self.reg_beta = cfg.regression.beta
 
     def forward(self, head_out: dict[str, torch.Tensor], labels: dict[str, torch.Tensor]) -> torch.Tensor:
         loss = torch.tensor(0.0, device=head_out["logits"].device)
         if "symmetry_label" in labels:
+            # Classification term — unchanged.
             loss = loss + self.cls_weight * F.cross_entropy(head_out["logits"], labels["symmetry_label"])
         if "symmetry_planes" in labels and "planes" in head_out:
             tp, pp = labels["symmetry_planes"], head_out["planes"]
             if tp.ndim == 3 and pp.ndim == 3:
                 mb, mk = min(tp.shape[0], pp.shape[0]), min(tp.shape[1], pp.shape[1])
                 if mb > 0 and mk > 0:
-                    loss = loss + self.plane_weight * F.l1_loss(pp[:mb, :mk], tp[:mb, :mk])
+                    loss = loss + self.plane_weight * regression_loss(
+                        pp[:mb, :mk], tp[:mb, :mk], self.reg_kind, self.reg_beta,
+                    )
         if "symmetry_axes" in labels and "axes" in head_out:
             ta, pa = labels["symmetry_axes"], head_out["axes"]
             if ta.ndim == 3 and pa.ndim == 3:
                 mb, mk = min(ta.shape[0], pa.shape[0]), min(ta.shape[1], pa.shape[1])
                 if mb > 0 and mk > 0:
-                    loss = loss + self.axis_weight * F.l1_loss(pa[:mb, :mk], ta[:mb, :mk])
+                    loss = loss + self.axis_weight * regression_loss(
+                        pa[:mb, :mk], ta[:mb, :mk], self.reg_kind, self.reg_beta,
+                    )
         return loss
 
 
@@ -291,12 +350,24 @@ class LossComputer(nn.Module):
     and passed into both the model forward and this loss computer via
     the `token_mask` argument, ensuring the same positions are masked
     during forward and used for reconstruction loss.
+
+    All trainable submodules (including the reconstruction projection head
+    used by masked-token and inpainting losses) are built in __init__ so
+    every parameter is registered with the optimizer from step 0.
     """
 
-    def __init__(self, cfg: LossConfig):
+    def __init__(
+        self,
+        cfg: LossConfig,
+        token_dim: int,
+        recon_target_dim: int,
+    ):
         super().__init__()
         self.cfg = cfg
         self.weights = cfg.weights
+        self.token_dim = token_dim
+        self.recon_target_dim = recon_target_dim
+
         self.masked_token = MaskedTokenLoss(cfg) if cfg.masked_token.enabled else None
         self.contrastive = MultiResContrastiveLoss(cfg) if cfg.contrastive.enabled else None
         self.inpainting = PartialInpaintingLoss(cfg) if cfg.inpainting.enabled else None
@@ -306,19 +377,46 @@ class LossComputer(nn.Module):
         self.reduction = ReductionLoss()
         self.text_align = TextAlignLoss(cfg) if cfg.text_align.enabled else None
 
-        # Reconstruction projection head (lazily built on first forward)
-        self.recon_proj = None
+        # Reconstruction projection head — built eagerly whenever either of
+        # the reconstruction-based losses is enabled. This keeps all trainable
+        # parameters visible to the optimizer at construction time and avoids
+        # silent first-forward initialization.
+        if cfg.masked_token.enabled or cfg.inpainting.enabled:
+            hidden = token_dim * 2
+            self.recon_proj: nn.Module | None = nn.Sequential(
+                nn.Linear(token_dim, hidden),
+                nn.GELU(),
+                nn.Linear(hidden, hidden),
+                nn.GELU(),
+                nn.Linear(hidden, recon_target_dim),
+            )
+        else:
+            self.recon_proj = None
 
-    def _ensure_recon_proj(self, token_dim: int, target_dim: int, device: torch.device) -> None:
-        """Build a deeper projection head on first forward."""
-        if self.recon_proj is None:
-            self.recon_proj = nn.Sequential(
-                nn.Linear(token_dim, token_dim * 2),
-                nn.GELU(),
-                nn.Linear(token_dim * 2, token_dim * 2),
-                nn.GELU(),
-                nn.Linear(token_dim * 2, target_dim),
-            ).to(device)
+        # Per-dimension normalization stats for raw_geo_stats reconstruction
+        # targets. Registered as buffers so they are saved in state_dict and
+        # survive checkpoint save/load. Initialized to identity (mean=0,
+        # std=1, calibrated=0) so that if calibration never runs, targets
+        # pass through unchanged — this is the backward-compat path.
+        self.recon_norm_enabled = cfg.recon_target_norm.enabled
+        self.recon_norm_eps = cfg.recon_target_norm.eps
+        D = max(1, int(recon_target_dim))
+        self.register_buffer(
+            "recon_target_mean", torch.zeros(D, dtype=torch.float32),
+        )
+        self.register_buffer(
+            "recon_target_std", torch.ones(D, dtype=torch.float32),
+        )
+        # uint8 {0, 1} flag — whether buffers above hold valid calibrated
+        # stats. Checked at forward time to decide pass-through vs normalize.
+        self.register_buffer(
+            "recon_target_calibrated", torch.zeros(1, dtype=torch.uint8),
+        )
+
+        # Tracks which supervised losses have already fired the
+        # "enabled in config but labels missing from batch" warning, so
+        # we warn once per loss name instead of spamming every step.
+        self._missing_label_warned: set[str] = set()
 
     def set_grid_shape(self, grid_shape: tuple[int, int, int]) -> None:
         """Inject latent grid shape for spatial masking strategies."""
@@ -328,6 +426,78 @@ class LossComputer(nn.Module):
         if self.inpainting is not None:
             self.inpainting.set_grid_shape(grid_shape)
 
+    def is_recon_target_calibrated(self) -> bool:
+        """Whether `recon_target_mean`/`_std` currently hold valid stats.
+
+        Set to True after a successful calibration pass, or after loading
+        a checkpoint that was saved with calibrated buffers. Read by the
+        trainer to decide whether to run a calibration pass.
+        """
+        return bool(self.recon_target_calibrated.item())
+
+    def set_recon_target_stats(
+        self, mean: torch.Tensor, std: torch.Tensor,
+    ) -> None:
+        """Write calibrated per-dim stats into the registered buffers.
+
+        The two tensors must have shape (recon_target_dim,). After this
+        call, `is_recon_target_calibrated()` returns True and
+        `_maybe_normalize_target` will apply `(x - mean) / (std + eps)`
+        to the reconstruction targets.
+        """
+        assert mean.shape == self.recon_target_mean.shape, (
+            f"mean shape {tuple(mean.shape)} != buffer shape "
+            f"{tuple(self.recon_target_mean.shape)}"
+        )
+        assert std.shape == self.recon_target_std.shape
+        self.recon_target_mean.data.copy_(mean.to(self.recon_target_mean.dtype))
+        self.recon_target_std.data.copy_(std.to(self.recon_target_std.dtype))
+        self.recon_target_calibrated.data.fill_(1)
+
+    def _check_supervised_labels(
+        self,
+        name: str,
+        batch: dict[str, torch.Tensor],
+        required_any_of: tuple[str, ...],
+    ) -> bool:
+        """Return True if any required label for `name` is in the batch.
+
+        Fires a one-time warning if the loss has weight > 0 in the config
+        but none of the expected label keys are present — this catches the
+        silent zero-loss failure mode where a head is enabled but the
+        dataset never provides labels for it, so loss silently contributes
+        0 and the head never trains. Weight == 0 losses don't warn because
+        zero-weighted losses are a legitimate "disabled" pattern.
+        """
+        if any(k in batch for k in required_any_of):
+            return True
+        weight = float(getattr(self.weights, name, 0.0))
+        if weight > 0.0 and name not in self._missing_label_warned:
+            print(
+                f"[LossComputer] WARNING: '{name}' loss has weight={weight} "
+                f"but none of {required_any_of} are present in the batch. "
+                f"Loss will contribute 0.0 every step — check that your "
+                f"dataset is actually emitting these labels."
+            )
+            self._missing_label_warned.add(name)
+        return False
+
+    def _maybe_normalize_target(self, target: torch.Tensor) -> torch.Tensor:
+        """Apply per-dim normalization to a reconstruction target.
+
+        Pass-through if normalization is disabled in the config OR if the
+        stats have not been calibrated yet. The normalization is applied
+        in the target's own dtype (bf16/fp32 autocast-safe) by casting the
+        fp32 buffers into the target's dtype before the arithmetic.
+        """
+        if not self.recon_norm_enabled:
+            return target
+        if not self.is_recon_target_calibrated():
+            return target
+        mean = self.recon_target_mean.to(dtype=target.dtype)
+        std = self.recon_target_std.to(dtype=target.dtype)
+        return (target - mean) / (std + self.recon_norm_eps)
+
     def forward(
         self,
         model_out: dict,
@@ -336,6 +506,12 @@ class LossComputer(nn.Module):
         token_mask: torch.Tensor | None = None,
     ) -> dict[str, torch.Tensor]:
         """Compute all applicable losses.
+
+        Returns a flat dict keyed by stable names. For every active loss
+        component `<name>`, the result contains both `<name>_raw` (the
+        unweighted value, detached) and `<name>_weighted` (value * cfg
+        weight, detached). `total` is the sum of all `_weighted` values
+        and is the exact tensor used for .backward().
 
         Args:
             model_out: output from backbone.forward_features()
@@ -347,15 +523,28 @@ class LossComputer(nn.Module):
         losses: dict[str, torch.Tensor] = {}
         device = model_out["token_embeddings"].device
 
-        # --- Build reconstruction projection if needed ---
-        if "raw_geo_stats" in model_out:
-            token_dim = model_out["token_embeddings"].shape[-1]
-            target_dim = model_out["raw_geo_stats"].shape[-1]
-            self._ensure_recon_proj(token_dim, target_dim, device)
+        # --- Sanity-check recon dims against the actual encoder output. ---
+        # recon_proj was built in __init__; if it exists and the encoder is
+        # emitting raw stats, dims must line up with what we allocated.
+        if self.recon_proj is not None and "raw_geo_stats" in model_out:
+            got_token_dim = model_out["token_embeddings"].shape[-1]
+            got_target_dim = model_out["raw_geo_stats"].shape[-1]
+            if got_token_dim != self.token_dim or got_target_dim != self.recon_target_dim:
+                raise RuntimeError(
+                    "LossComputer.recon_proj dims do not match the encoder: "
+                    f"configured token_dim={self.token_dim}, target_dim={self.recon_target_dim}; "
+                    f"got token_dim={got_token_dim}, target_dim={got_target_dim}. "
+                    "Rebuild LossComputer with the correct dims before training."
+                )
 
         # --- Masked token loss (uses externally-created mask) ---
-        if self.masked_token is not None and "raw_geo_stats" in model_out and token_mask is not None:
-            target = model_out["raw_geo_stats"]
+        if (
+            self.masked_token is not None
+            and "raw_geo_stats" in model_out
+            and token_mask is not None
+            and self.recon_proj is not None
+        ):
+            target = self._maybe_normalize_target(model_out["raw_geo_stats"])
             predicted = self.recon_proj(model_out["token_embeddings"])
             losses["masked_token"] = self.masked_token(predicted, target, token_mask)
 
@@ -367,32 +556,49 @@ class LossComputer(nn.Module):
             )
 
         # --- Inpainting loss (separate spatial mask, independent of token_mask) ---
-        if self.inpainting is not None and "raw_geo_stats" in model_out:
-            target = model_out["raw_geo_stats"]
+        if (
+            self.inpainting is not None
+            and "raw_geo_stats" in model_out
+            and self.recon_proj is not None
+        ):
+            target = self._maybe_normalize_target(model_out["raw_geo_stats"])
             predicted = self.recon_proj(model_out["token_embeddings"])
             B = predicted.shape[0]
             inpaint_mask = self.inpainting.create_spatial_mask(B, device)
             losses["inpainting"] = self.inpainting(predicted, target, inpaint_mask)
 
         # --- Supervised losses ---
+        # Each branch is gated on (a) its head being in the model output
+        # and (b) the required labels being in the batch. The second check
+        # warns once if the loss is expected but no labels are provided,
+        # preventing the old silent-zero failure mode.
         heads = model_out.get("heads", {})
 
-        if "symmetry" in heads:
+        if "symmetry" in heads and self._check_supervised_labels(
+            "symmetry", batch,
+            ("symmetry_label", "symmetry_planes", "symmetry_axes"),
+        ):
             sym_loss = self.symmetry(heads["symmetry"], batch)
             if sym_loss.item() > 0:
                 losses["symmetry"] = sym_loss
 
-        if "primitive" in heads:
+        if "primitive" in heads and self._check_supervised_labels(
+            "primitive", batch, ("primitive_labels",),
+        ):
             prim_loss = self.primitive(heads["primitive"], batch)
             if prim_loss.item() > 0:
                 losses["primitive"] = prim_loss
 
-        if "part" in heads:
+        if "part" in heads and self._check_supervised_labels(
+            "part", batch, ("part_labels",),
+        ):
             part_loss = self.part(heads["part"], batch)
             if part_loss.item() > 0:
                 losses["part"] = part_loss
 
-        if "reduction" in heads:
+        if "reduction" in heads and self._check_supervised_labels(
+            "reduction", batch, ("reduction_label",),
+        ):
             red_loss = self.reduction(heads["reduction"], batch)
             if red_loss.item() > 0:
                 losses["reduction"] = red_loss
@@ -404,12 +610,19 @@ class LossComputer(nn.Module):
             )
 
         # --- Apply per-loss weights and compute total ---
-        weighted: dict[str, torch.Tensor] = {}
+        # Emit both *_raw (unweighted) and *_weighted for every active loss so
+        # per-step logging, epoch averages, and `total` all use the same
+        # definitions. `total` is exactly the loss used for .backward().
+        result: dict[str, torch.Tensor] = {}
+        total: torch.Tensor | None = None
         for name, val in losses.items():
-            w = getattr(self.weights, name, 1.0)
-            weighted[name] = val * w
+            w = float(getattr(self.weights, name, 1.0))
+            weighted_val = val * w
+            result[f"{name}_raw"] = val.detach()
+            result[f"{name}_weighted"] = weighted_val.detach()
+            total = weighted_val if total is None else total + weighted_val
 
-        total = sum(weighted.values()) if weighted else torch.tensor(0.0, device=device)
-        # Return unweighted individual losses for logging, plus weighted total
-        losses["total"] = total
-        return losses
+        if total is None:
+            total = torch.tensor(0.0, device=device)
+        result["total"] = total
+        return result

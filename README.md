@@ -13,11 +13,75 @@ A 3D geometry foundation model for industrial CAD analysis. Takes a mesh of a ph
 | Datasets | Fusion360 (58.4%), MFCAD (25.4%), Thingi10K (16.2%) |
 | Train / val split | 58,069 / 2,983 (deterministic hash-based) |
 | Compute | 8 × H100 80GB, 50 epochs, ~2h 30min |
-| Val reconstruction loss | 0.030 (matches train within 1%) |
+| Val reconstruction R² | **0.729** |
+| Val SmoothL1 (masked, β=1.0) | **0.024** (matches training loss curves) |
+| Contrastive top-1 pair accuracy | **98.1%** |
 | Precision | bf16 + DDP + torch.compile |
-| Model hub | [`simd-ai/shape-foundation-small-v3`](https://huggingface.co/simd-ai/shape-foundation-small-v3) |
+| Model hub | [`bayang/shape-foundation-small-v3`](https://huggingface.co/bayang/shape-foundation-small-v3) |
 
 The self-supervised backbone generalizes to unseen meshes. Supervised task heads (symmetry, primitive, part, reduction) are present in the architecture but their weights are currently `0.0` — the stock synthetic labels do not generalize and would overfit the model. See [Known Limitations](#known-limitations) below.
+
+## Results
+
+All metrics are computed on the held-out validation split (N = 2,983 meshes, deterministic hash-based split).
+
+### Reconstruction (pretraining objective)
+
+Masked-token reconstruction measured in the same normalized target space used during training. 50% of latent tokens are masked and predicted from the remaining context.
+
+| Metric | Value | Notes |
+|---|---:|---|
+| `recon_smoothl1` (β=1.0) | **0.024** | Matches `train_epoch/masked_token_raw` — no train/val gap |
+| `recon_mse` | 0.326 | Reference squared error in normalized space |
+| `recon_r2` | **0.729** | Coefficient of determination: 72.9% of masked-token geometry variance explained from surrounding context |
+
+### Contrastive embedding quality (Wang & Isola, 2020)
+
+Augmented views are generated with the same jitter (σ = 0.02) and point dropout (30%) used in training. Positive pairs must match through cosine similarity; the pool size is 2,048 meshes.
+
+| Metric | Value | Notes |
+|---|---:|---|
+| `contrastive_top1_acc` | **98.1%** | Positive pair is top-1 nearest neighbor under cosine similarity |
+| `contrastive_infonce` (τ=0.07) | **0.146** | Symmetric InfoNCE on (clean, augmented) pairs |
+| `contrastive_alignment` | 0.132 | E‖f(x) − f(y)‖² for positive pairs (lower = augmentation-invariant) |
+| `contrastive_uniformity` | −3.84 | log E[exp(−2‖f(x) − f(y)‖²)] over random pairs (more negative = more uniform coverage) |
+
+### Embedding geometry (descriptive)
+
+| Metric | Value | Notes |
+|---|---:|---|
+| `pairwise_cosine_mean` | 0.002 | Random mesh pairs are ~orthogonal — well-spread embedding space |
+| `pairwise_cosine_std` | 0.139 | Spread of the pairwise similarity distribution |
+| `embedding_norm_mean` | 1.33 | Pre-normalization L2 norm |
+| `embedding_norm_std` | 0.29 | Consistent across meshes |
+
+![Evaluation metrics summary](results/plots/metrics_summary.png)
+
+Raw artifacts are checked into `results/`:
+
+| File | Purpose |
+|---|---|
+| `results/small_v3_eval_val.json` | Structured JSON payload with timestamp, checkpoint, metrics |
+| `results/small_v3_eval_val.csv` | Single-row flat CSV (plot-friendly) |
+| `results/eval_history.csv` | Append-mode history across runs for cross-version tracking |
+| `results/plots/metrics_summary.png` | Horizontal bar chart of all metrics |
+| `results/plots/alignment_uniformity.png` | Wang & Isola (2020) diagnostic scatter |
+
+### How to reproduce
+
+```bash
+# Run full eval on the val split
+python -m shape_foundation.scripts.eval_backbone \
+    --checkpoint checkpoints/checkpoint_final.pt \
+    --output results/small_v3_eval_val.json \
+    --history results/eval_history.csv
+
+# Regenerate plots
+python -m shape_foundation.scripts.plot_eval_metrics \
+    --csv results/small_v3_eval_val.csv \
+    --history results/eval_history.csv \
+    --output results/plots/
+```
 
 ## Architecture
 
@@ -68,7 +132,7 @@ gcloud auth login
 gcloud storage cp -r gs://<YOUR_BUCKET>/shape-v2/data_cache/ data_cache/
 
 # 2. Download the small v3 checkpoint from HuggingFace
-hf download simd-ai/shape-foundation-small-v3 --local-dir checkpoints/
+hf download bayang/shape-foundation-small-v3 --local-dir checkpoints/
 
 # 3. Train (or resume from the downloaded checkpoint)
 torchrun --nproc_per_node=8 -m shape_foundation.scripts.train_pretrain --config configs/small.yaml

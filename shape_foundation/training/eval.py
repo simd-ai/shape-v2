@@ -1,12 +1,47 @@
-"""Evaluation suite for the Shape foundation model.
+"""Self-supervised evaluation suite for the Shape foundation model.
 
-Metrics:
-    1. Cross-resolution retrieval stability (Recall@K, cosine agreement)
-    2. Symmetry detection accuracy (classification F1, angular error)
-    3. Primitive recognition accuracy
-    4. Part segmentation transfer (mIoU)
-    5. Robustness to mesh corruption / decimation
-    6. Topology-reduction recommendation accuracy
+The evaluator measures the model along the axes it was actually trained on:
+masked-token reconstruction and multi-resolution contrastive consistency.
+All metrics are computed in the same normalized target space used during
+pretraining (per-dim z-scoring calibrated on the training split), so the
+reported numbers are directly comparable to the training loss curves.
+
+Metrics
+-------
+Reconstruction (self-supervised objective)
+    recon_smoothl1   SmoothL1 loss (β = 1.0) at masked positions, in normalized
+                     target space. Directly comparable to `train/masked_token_raw`.
+    recon_mse        Mean squared error at masked positions (normalized space).
+    recon_r2         Coefficient of determination on normalized targets;
+                     interpretable scale-free measure of how much target
+                     variance the reconstruction captures.
+
+Contrastive (embedding geometry; Wang & Isola, 2020)
+    contrastive_alignment   E[‖f(x) − f(y)‖²] over positive pairs (same mesh,
+                            two augmentations). Lower = augmentation-invariant.
+    contrastive_uniformity  log E[exp(−t ‖f(x) − f(y)‖²)] over random pairs,
+                            t = 2. More negative = more uniformly spread
+                            embedding distribution on the unit sphere.
+    contrastive_infonce     Symmetric InfoNCE loss (τ = 0.07) between clean
+                            and augmented views. Matches the training objective.
+    contrastive_top1_acc    Fraction of queries whose positive pair is the
+                            top-1 nearest neighbor under cosine similarity.
+
+Embedding geometry (descriptive, not a quality score)
+    embedding_norm_mean/std  Distribution of pre-normalization embedding norms.
+    pairwise_cosine_mean/std Random-pair cosine similarity distribution; close
+                             to zero indicates well-spread embeddings.
+
+Robustness (via `eval_robustness`)
+    robustness_noise_{σ}       Mean cosine agreement between clean and jittered
+                               pooled embeddings at Gaussian noise σ.
+    robustness_decimate_{r}    Mean cosine agreement under random point
+                               dropout keeping fraction r of surface points.
+
+Supervised task heads (symmetry, primitive, part, reduction) are intentionally
+NOT evaluated: they are trained with weight 0.0 in the v3 release because the
+stock synthetic labels do not generalize. Any accuracy number on those heads
+would reflect random initialization only.
 """
 
 from __future__ import annotations
@@ -14,6 +49,7 @@ from __future__ import annotations
 from collections import defaultdict
 from typing import Any
 
+import math
 import numpy as np
 import torch
 import torch.nn.functional as F
@@ -24,227 +60,216 @@ from shape_foundation.models.gaot_backbone import GAOTBackbone
 
 
 class Evaluator:
-    """Run evaluation benchmarks on a trained model."""
+    """Self-supervised evaluation for a pretrained Shape foundation model.
 
-    def __init__(self, model: GAOTBackbone, device: torch.device | str = "cuda"):
+    Args:
+        model: ``GAOTBackbone`` with pretrained weights.
+        device: torch device for forward passes.
+        loss_computer: Optional ``LossComputer`` from the same checkpoint.
+            When provided, the evaluator uses its calibrated per-dimension
+            target-normalization buffers and its masked-token mask
+            generator, so reconstruction metrics are computed in the exact
+            target space the model was trained on. When ``None``, the
+            reconstruction section is skipped.
+    """
+
+    def __init__(
+        self,
+        model: GAOTBackbone,
+        device: torch.device | str = "cuda",
+        loss_computer: Any = None,
+    ):
         self.model = model
         self.device = torch.device(device) if isinstance(device, str) else device
-        self.model.to(self.device)
-        self.model.eval()
+        self.model.to(self.device).eval()
+        self.loss_computer = loss_computer
+        if loss_computer is not None:
+            loss_computer.to(self.device).eval()
+
+    # ------------------------------------------------------------------
+    # Main entry point
+    # ------------------------------------------------------------------
 
     @torch.no_grad()
-    def evaluate_all(self, dataloader: DataLoader) -> dict[str, float]:
-        """Run all evaluation metrics on a dataloader."""
-        results: dict[str, float] = {}
+    def evaluate_all(
+        self,
+        dataloader: DataLoader,
+        mask_ratio: float = 0.5,
+        contrastive_jitter: float = 0.02,
+        contrastive_dropout: float = 0.30,
+        contrastive_temperature: float = 0.07,
+        uniformity_t: float = 2.0,
+        subsample_for_pairwise: int = 2048,
+    ) -> dict[str, float]:
+        """Run all self-supervised evaluation metrics over the full dataloader.
 
-        embeddings, labels = self._collect_embeddings_and_labels(dataloader)
+        Args:
+            mask_ratio: fraction of latent tokens to mask for the reconstruction
+                metric. Should match the training ``masked_token.mask_ratio``.
+            contrastive_jitter: per-coordinate Gaussian jitter σ used to produce
+                the augmented view; should match the training
+                ``contrastive.jitter_std``.
+            contrastive_dropout: probability of point dropout for the augmented
+                view; should match ``contrastive.point_dropout``.
+            contrastive_temperature: InfoNCE temperature; should match
+                ``contrastive.temperature``.
+            uniformity_t: Wang & Isola (2020) uniformity kernel parameter.
+            subsample_for_pairwise: cap on the number of embeddings used for
+                pairwise (O(N²)) metrics such as uniformity and pairwise
+                cosine statistics. Does not affect alignment or InfoNCE.
+        """
+        has_recon = (
+            self.loss_computer is not None
+            and self.loss_computer.recon_proj is not None
+        )
 
-        if "pooled" in embeddings:
-            results.update(self._eval_retrieval(embeddings["pooled"]))
+        # Streaming accumulators — avoid holding per-token tensors in RAM.
+        recon = {
+            "sum_smoothl1": 0.0,
+            "sum_mse": 0.0,
+            "sum_ss_res": 0.0,
+            "sum_target": 0.0,
+            "sum_target_sq": 0.0,
+            "n_elem": 0,
+        }
 
-        if "symmetry_label" in labels:
-            results.update(self._eval_symmetry(embeddings, labels))
+        clean_embeddings: list[torch.Tensor] = []
+        aug_embeddings: list[torch.Tensor] = []
 
-        if "primitive_labels" in labels:
-            results.update(self._eval_primitives(embeddings, labels))
-
-        if "part_labels" in labels:
-            results.update(self._eval_parts(embeddings, labels))
-
-        if "reduction_label" in labels:
-            results.update(self._eval_reduction(embeddings, labels))
-
-        return results
-
-    def _collect_embeddings_and_labels(
-        self, dataloader: DataLoader,
-    ) -> tuple[dict[str, list], dict[str, list]]:
-        """Forward pass on all data, collect embeddings and predictions."""
-        all_embeddings: dict[str, list] = defaultdict(list)
-        all_labels: dict[str, list] = defaultdict(list)
-
-        for batch in tqdm(dataloader, desc="Collecting embeddings"):
-            points = batch["points"].to(self.device)
-            features = batch["features"].to(self.device)
+        for batch in tqdm(dataloader, desc="Evaluating", total=len(dataloader)):
+            points = batch["points"].to(self.device, non_blocking=True)
+            features = batch["features"].to(self.device, non_blocking=True)
             normals = batch.get("normals")
             curvature = batch.get("curvature")
             if normals is not None:
-                normals = normals.to(self.device)
+                normals = normals.to(self.device, non_blocking=True)
             if curvature is not None:
-                curvature = curvature.to(self.device)
+                curvature = curvature.to(self.device, non_blocking=True)
 
-            out = self.model.forward_features(points, features, normals, curvature)
+            B = points.shape[0]
 
-            all_embeddings["pooled"].append(out["pooled_embedding"].cpu())
-            all_embeddings["tokens"].append(out["token_embeddings"].cpu())
+            # ------------------------------------------------------------
+            # Clean forward (with mask, for reconstruction + clean embedding)
+            # ------------------------------------------------------------
+            T = (
+                self.model.module.encoder.num_tokens
+                if hasattr(self.model, "module")
+                else self.model.encoder.num_tokens
+            )
+            mask = self._make_eval_mask(B, T, mask_ratio)
 
-            heads = out.get("heads", {})
-            if "symmetry" in heads:
-                all_embeddings["sym_logits"].append(heads["symmetry"]["logits"].cpu())
-                if "planes" in heads["symmetry"]:
-                    all_embeddings["sym_planes"].append(heads["symmetry"]["planes"].cpu())
-            if "primitive" in heads:
-                all_embeddings["prim_logits"].append(heads["primitive"]["primitive_logits"].cpu())
-            if "part" in heads:
-                all_embeddings["part_logits"].append(heads["part"]["part_logits"].cpu())
-            if "reduction" in heads:
-                all_embeddings["red_logits"].append(heads["reduction"]["reduction_logits"].cpu())
+            out_clean = self.model(points, features, normals, curvature, mask)
+            clean_embeddings.append(out_clean["pooled_embedding"].detach().cpu())
 
-            label_keys = [
-                "symmetry_label", "symmetry_planes", "symmetry_axes",
-                "primitive_labels", "part_labels", "reduction_label",
-            ]
-            for k in label_keys:
-                if k in batch:
-                    v = batch[k]
-                    all_labels[k].append(v if isinstance(v, torch.Tensor) else torch.tensor(v))
+            # ------------------------------------------------------------
+            # Reconstruction metrics in normalized target space
+            # ------------------------------------------------------------
+            if has_recon and "raw_geo_stats" in out_clean:
+                target_raw = out_clean["raw_geo_stats"]
+                target = self.loss_computer._maybe_normalize_target(target_raw)
+                predicted = self.loss_computer.recon_proj(out_clean["token_embeddings"])
 
-        # concatenate
-        for k in all_embeddings:
-            if all_embeddings[k]:
-                all_embeddings[k] = torch.cat(all_embeddings[k], dim=0)
-        for k in all_labels:
-            if all_labels[k]:
-                all_labels[k] = torch.cat(all_labels[k], dim=0)
+                pred_m = predicted[mask]        # (M_batch, D)
+                tgt_m = target[mask]             # (M_batch, D)
 
-        return dict(all_embeddings), dict(all_labels)
+                if pred_m.numel() > 0:
+                    recon["sum_smoothl1"] += F.smooth_l1_loss(
+                        pred_m, tgt_m, reduction="sum", beta=1.0,
+                    ).item()
+                    recon["sum_mse"] += F.mse_loss(
+                        pred_m, tgt_m, reduction="sum",
+                    ).item()
+                    recon["sum_ss_res"] += (pred_m - tgt_m).pow(2).sum().item()
+                    recon["sum_target"] += tgt_m.sum().item()
+                    recon["sum_target_sq"] += tgt_m.pow(2).sum().item()
+                    recon["n_elem"] += pred_m.numel()
 
-    def _eval_retrieval(
-        self, pooled: torch.Tensor, k_values: list[int] | None = None,
-    ) -> dict[str, float]:
-        """Cross-resolution retrieval: Recall@K and cosine agreement."""
-        if k_values is None:
-            k_values = [1, 5, 10]
+            # ------------------------------------------------------------
+            # Augmented forward (for contrastive metrics)
+            # ------------------------------------------------------------
+            aug_points, aug_features, aug_normals, aug_curvature = self._augment_view(
+                points, features, normals, curvature,
+                jitter=contrastive_jitter, dropout=contrastive_dropout,
+            )
+            out_aug = self.model(
+                aug_points, aug_features, aug_normals, aug_curvature, None,
+            )
+            aug_embeddings.append(out_aug["pooled_embedding"].detach().cpu())
 
-        N = pooled.shape[0]
-        if N < 2:
-            return {}
+        # ======================================================================
+        # Aggregate
+        # ======================================================================
+        results: dict[str, float] = {}
 
-        pooled_norm = F.normalize(pooled, dim=-1)
-        sim = pooled_norm @ pooled_norm.T  # (N, N)
+        # --- Reconstruction ---
+        if recon["n_elem"] > 0:
+            n = recon["n_elem"]
+            mean_target = recon["sum_target"] / n
+            ss_tot = recon["sum_target_sq"] - n * (mean_target ** 2)
+            ss_res = recon["sum_ss_res"]
+            r2 = 1.0 - ss_res / max(ss_tot, 1e-12)
 
-        # self-similarity (should be high for same-mesh, different resolution)
-        results = {}
-        for k in k_values:
-            if k >= N:
-                continue
-            # top-k excluding self
-            sim_noself = sim.clone()
-            sim_noself.fill_diagonal_(-float("inf"))
-            _, topk_idx = sim_noself.topk(k, dim=-1)
-            # self-retrieval recall (identity as proxy)
-            results[f"retrieval_recall@{k}"] = 1.0  # placeholder; real eval needs pairs
+            results["recon_smoothl1"] = recon["sum_smoothl1"] / n
+            results["recon_mse"] = recon["sum_mse"] / n
+            results["recon_r2"] = r2
 
-        # mean pairwise cosine similarity as embedding quality proxy
-        triu_idx = torch.triu_indices(N, N, offset=1)
-        results["mean_cosine_sim"] = sim[triu_idx[0], triu_idx[1]].mean().item()
+        # --- Contrastive + embedding geometry ---
+        clean = torch.cat(clean_embeddings, dim=0)
+        aug = torch.cat(aug_embeddings, dim=0)
+        N = clean.shape[0]
 
-        return results
+        if N >= 2:
+            clean_norm = F.normalize(clean, dim=-1)
+            aug_norm = F.normalize(aug, dim=-1)
 
-    def _eval_symmetry(
-        self, embeddings: dict, labels: dict,
-    ) -> dict[str, float]:
-        """Symmetry classification F1 and regression angular error."""
-        results = {}
+            # Alignment (Wang & Isola 2020, Eq. 1): E[||f(x) - f(y)||²] for positive pairs
+            alignment = (clean_norm - aug_norm).pow(2).sum(dim=-1).mean().item()
+            results["contrastive_alignment"] = alignment
 
-        if "sym_logits" in embeddings and "symmetry_label" in labels:
-            logits = embeddings["sym_logits"]
-            target = labels["symmetry_label"]
-            pred = logits.argmax(dim=-1)
+            # Uniformity (Wang & Isola 2020, Eq. 2): log E[exp(-t ||x - y||²)]
+            M = min(N, subsample_for_pairwise)
+            idx = torch.randperm(N)[:M]
+            sub = clean_norm[idx]
+            pdist_sq = torch.cdist(sub, sub).pow(2)
+            off_diag = ~torch.eye(M, dtype=torch.bool)
+            uniformity = torch.log(
+                torch.exp(-uniformity_t * pdist_sq[off_diag]).mean() + 1e-12
+            ).item()
+            results["contrastive_uniformity"] = uniformity
 
-            # accuracy
-            results["symmetry_accuracy"] = (pred == target).float().mean().item()
+            # InfoNCE on (clean, aug) pairs — symmetric
+            sub_clean = clean_norm[idx]
+            sub_aug = aug_norm[idx]
+            logits = sub_clean @ sub_aug.T / contrastive_temperature
+            labels = torch.arange(M)
+            loss_ab = F.cross_entropy(logits, labels).item()
+            loss_ba = F.cross_entropy(logits.T, labels).item()
+            results["contrastive_infonce"] = 0.5 * (loss_ab + loss_ba)
 
-            # per-class F1
-            num_classes = logits.shape[-1]
-            f1s = []
-            for c in range(num_classes):
-                tp = ((pred == c) & (target == c)).sum().float()
-                fp = ((pred == c) & (target != c)).sum().float()
-                fn = ((pred != c) & (target == c)).sum().float()
-                precision = tp / (tp + fp + 1e-8)
-                recall = tp / (tp + fn + 1e-8)
-                f1 = 2 * precision * recall / (precision + recall + 1e-8)
-                f1s.append(f1.item())
-            results["symmetry_f1_macro"] = np.mean(f1s)
+            # Top-1 retrieval accuracy: for each query, is its positive pair
+            # the top-1 cosine-nearest neighbor in the augmented view pool?
+            pred_ab = logits.argmax(dim=-1)
+            results["contrastive_top1_acc"] = (pred_ab == labels).float().mean().item()
 
-        # angular error on predicted planes
-        if "sym_planes" in embeddings and "symmetry_planes" in labels:
-            pred_planes = embeddings["sym_planes"]  # (N, K, 4)
-            gt_planes = labels["symmetry_planes"]
-            if pred_planes.ndim == 3 and gt_planes.ndim == 3:
-                pred_n = F.normalize(pred_planes[:, 0, :3], dim=-1)
-                gt_n = F.normalize(gt_planes[:, 0, :3], dim=-1)
-                cos_sim = (pred_n * gt_n).sum(dim=-1).abs().clamp(0, 1)
-                angle_err = torch.acos(cos_sim) * 180 / np.pi
-                results["symmetry_plane_angular_error_deg"] = angle_err.mean().item()
+            # Embedding norm distribution
+            norms = clean.norm(dim=-1)
+            results["embedding_norm_mean"] = norms.mean().item()
+            results["embedding_norm_std"] = norms.std().item()
 
-        return results
-
-    def _eval_primitives(
-        self, embeddings: dict, labels: dict,
-    ) -> dict[str, float]:
-        """Per-token primitive classification accuracy."""
-        results = {}
-        if "prim_logits" in embeddings and "primitive_labels" in labels:
-            logits = embeddings["prim_logits"]  # (N, T, C)
-            target = labels["primitive_labels"]  # (N, T)
-            if logits.shape[1] == target.shape[1]:
-                pred = logits.argmax(dim=-1)
-                mask = target >= 0
-                results["primitive_accuracy"] = (pred[mask] == target[mask]).float().mean().item()
-        return results
-
-    def _eval_parts(
-        self, embeddings: dict, labels: dict,
-    ) -> dict[str, float]:
-        """Part segmentation mIoU."""
-        results = {}
-        if "part_logits" in embeddings and "part_labels" in labels:
-            logits = embeddings["part_logits"]
-            target = labels["part_labels"]
-            if logits.shape[1] == target.shape[1]:
-                pred = logits.argmax(dim=-1)
-                mask = target >= 0
-                num_classes = logits.shape[-1]
-                ious = []
-                for c in range(num_classes):
-                    inter = ((pred == c) & (target == c) & mask).sum().float()
-                    union = (((pred == c) | (target == c)) & mask).sum().float()
-                    if union > 0:
-                        ious.append((inter / union).item())
-                if ious:
-                    results["part_mIoU"] = np.mean(ious)
-        return results
-
-    def _eval_reduction(
-        self, embeddings: dict, labels: dict,
-    ) -> dict[str, float]:
-        """Reduction recommendation accuracy and calibration."""
-        results = {}
-        if "red_logits" in embeddings and "reduction_label" in labels:
-            logits = embeddings["red_logits"]
-            target = labels["reduction_label"]
-            pred = logits.argmax(dim=-1)
-            results["reduction_accuracy"] = (pred == target).float().mean().item()
-
-            # expected calibration error (ECE)
-            probs = F.softmax(logits, dim=-1)
-            confidences = probs.max(dim=-1).values
-            correct = (pred == target).float()
-            n_bins = 10
-            bin_boundaries = torch.linspace(0, 1, n_bins + 1)
-            ece = 0.0
-            for i in range(n_bins):
-                mask = (confidences > bin_boundaries[i]) & (confidences <= bin_boundaries[i + 1])
-                if mask.sum() > 0:
-                    avg_conf = confidences[mask].mean().item()
-                    avg_acc = correct[mask].mean().item()
-                    ece += mask.sum().item() * abs(avg_conf - avg_acc)
-            ece /= max(1, len(target))
-            results["reduction_ece"] = ece
+            # Random-pair cosine similarity distribution
+            idx_a = torch.randperm(N)[:M]
+            idx_b = torch.randperm(N)[:M]
+            valid = idx_a != idx_b
+            if valid.any():
+                sims = (clean_norm[idx_a[valid]] * clean_norm[idx_b[valid]]).sum(dim=-1)
+                results["pairwise_cosine_mean"] = sims.mean().item()
+                results["pairwise_cosine_std"] = sims.std().item()
 
         return results
+
+    # ------------------------------------------------------------------
+    # Robustness
+    # ------------------------------------------------------------------
 
     @torch.no_grad()
     def eval_robustness(
@@ -252,49 +277,115 @@ class Evaluator:
         dataloader: DataLoader,
         noise_levels: list[float] | None = None,
         decimation_ratios: list[float] | None = None,
+        max_batches: int | None = None,
     ) -> dict[str, float]:
-        """Test robustness to noise and decimation.
+        """Embedding stability under input perturbations.
 
-        Measures cosine similarity between clean and corrupted embeddings.
+        For each perturbation magnitude, reports the mean cosine agreement
+        between pooled embeddings of the clean and perturbed mesh, averaged
+        over the full validation set (or up to ``max_batches`` batches).
+        A perfectly robust model yields 1.0 across all conditions.
         """
         if noise_levels is None:
             noise_levels = [0.001, 0.005, 0.01, 0.05]
         if decimation_ratios is None:
             decimation_ratios = [0.5, 0.25, 0.1]
 
-        results = {}
+        accum: dict[str, list[torch.Tensor]] = defaultdict(list)
 
-        # collect one batch
-        batch = next(iter(dataloader))
-        points = batch["points"].to(self.device)
-        features = batch["features"].to(self.device)
-        normals = batch.get("normals")
-        if normals is not None:
-            normals = normals.to(self.device)
+        total = len(dataloader) if max_batches is None else min(len(dataloader), max_batches)
+        for i, batch in enumerate(tqdm(dataloader, desc="Robustness", total=total)):
+            if max_batches is not None and i >= max_batches:
+                break
 
-        out_clean = self.model.forward_tokens(points, features, normals)
-        emb_clean = F.normalize(out_clean["pooled_embedding"], dim=-1)
+            points = batch["points"].to(self.device, non_blocking=True)
+            features = batch["features"].to(self.device, non_blocking=True)
+            normals = batch.get("normals")
+            if normals is not None:
+                normals = normals.to(self.device, non_blocking=True)
 
-        # noise robustness
-        for noise in noise_levels:
-            noisy_points = points + torch.randn_like(points) * noise
-            noisy_features = features.clone()
-            noisy_features[:, :, :3] = noisy_points
-            out_noisy = self.model.forward_tokens(noisy_points, noisy_features, normals)
-            emb_noisy = F.normalize(out_noisy["pooled_embedding"], dim=-1)
-            cos_sim = (emb_clean * emb_noisy).sum(dim=-1).mean().item()
-            results[f"robustness_noise_{noise}"] = cos_sim
+            out_clean = self.model.forward_tokens(points, features, normals)
+            emb_clean = F.normalize(out_clean["pooled_embedding"], dim=-1)
 
-        # decimation robustness
-        for ratio in decimation_ratios:
-            n_keep = max(1, int(points.shape[1] * ratio))
-            idx = torch.randperm(points.shape[1])[:n_keep]
-            dec_points = points[:, idx]
-            dec_features = features[:, idx]
-            dec_normals = normals[:, idx] if normals is not None else None
-            out_dec = self.model.forward_tokens(dec_points, dec_features, dec_normals)
-            emb_dec = F.normalize(out_dec["pooled_embedding"], dim=-1)
-            cos_sim = (emb_clean * emb_dec).sum(dim=-1).mean().item()
-            results[f"robustness_decimate_{ratio}"] = cos_sim
+            # Noise perturbation
+            for sigma in noise_levels:
+                noisy_points = points + torch.randn_like(points) * sigma
+                noisy_features = features.clone()
+                if noisy_features.shape[-1] >= 3:
+                    noisy_features[..., :3] = noisy_points
+                out_noisy = self.model.forward_tokens(noisy_points, noisy_features, normals)
+                emb_noisy = F.normalize(out_noisy["pooled_embedding"], dim=-1)
+                cos = (emb_clean * emb_noisy).sum(dim=-1)
+                accum[f"robustness_noise_{sigma}"].append(cos.detach().cpu())
 
+            # Decimation perturbation
+            for ratio in decimation_ratios:
+                n_keep = max(1, int(points.shape[1] * ratio))
+                idx = torch.randperm(points.shape[1], device=self.device)[:n_keep]
+                dec_points = points[:, idx]
+                dec_features = features[:, idx]
+                dec_normals = normals[:, idx] if normals is not None else None
+                out_dec = self.model.forward_tokens(dec_points, dec_features, dec_normals)
+                emb_dec = F.normalize(out_dec["pooled_embedding"], dim=-1)
+                cos = (emb_clean * emb_dec).sum(dim=-1)
+                accum[f"robustness_decimate_{ratio}"].append(cos.detach().cpu())
+
+        results: dict[str, float] = {}
+        for key, vals in accum.items():
+            if vals:
+                results[key] = torch.cat(vals).mean().item()
         return results
+
+    # ------------------------------------------------------------------
+    # Internals
+    # ------------------------------------------------------------------
+
+    def _make_eval_mask(self, B: int, T: int, mask_ratio: float) -> torch.Tensor:
+        """Generate a token mask using the same strategy as training.
+
+        Prefers the loss computer's ``MaskedTokenLoss.create_mask`` to keep
+        the evaluated mask distribution identical to training. Falls back
+        to uniform random masking if the loss computer is unavailable.
+        """
+        if (
+            self.loss_computer is not None
+            and self.loss_computer.masked_token is not None
+        ):
+            orig = self.loss_computer.masked_token.mask_ratio
+            self.loss_computer.masked_token.mask_ratio = mask_ratio
+            try:
+                return self.loss_computer.masked_token.create_mask(B, T, self.device)
+            finally:
+                self.loss_computer.masked_token.mask_ratio = orig
+
+        n_mask = int(T * mask_ratio)
+        mask = torch.zeros(B, T, dtype=torch.bool, device=self.device)
+        for b in range(B):
+            idx = torch.randperm(T, device=self.device)[:n_mask]
+            mask[b, idx] = True
+        return mask
+
+    def _augment_view(
+        self,
+        points: torch.Tensor,
+        features: torch.Tensor,
+        normals: torch.Tensor | None,
+        curvature: torch.Tensor | None,
+        jitter: float,
+        dropout: float,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor | None, torch.Tensor | None]:
+        """Produce an augmented view matching the training-time augmentation."""
+        noise = torch.randn_like(points) * jitter
+        aug_points = points + noise
+
+        aug_features = features.clone()
+        if aug_features.shape[-1] >= 3:
+            aug_features[..., :3] = aug_points
+
+        drop = torch.rand(aug_points.shape[:2], device=aug_points.device) < dropout
+        keep = (~drop).unsqueeze(-1).float()
+        aug_points = aug_points * keep
+        aug_features = aug_features * keep
+        aug_normals = normals * keep if normals is not None else None
+        aug_curvature = curvature * keep if curvature is not None else None
+        return aug_points, aug_features, aug_normals, aug_curvature

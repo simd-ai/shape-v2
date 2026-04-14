@@ -19,7 +19,7 @@ from tqdm import tqdm
 
 from shape_foundation.configs.default import ShapeConfig
 from shape_foundation.models.gaot_backbone import GAOTBackbone
-from shape_foundation.training.losses import LossComputer
+from shape_foundation.training.losses import LossComputer, compute_raw_geo_stats_dim
 from shape_foundation.data.dataset import MeshDataset, CollateFunction
 
 
@@ -61,12 +61,20 @@ class Trainer:
         self.model = base_model
         self.raw_model = self.model.module if isinstance(self.model, DDP) else self.model
 
-        # Losses — build recon_proj eagerly so its params exist before optimizer
-        self.loss_computer = LossComputer(self.tcfg.loss).to(self.device)
+        # Losses — all trainable submodules (including the reconstruction
+        # projection head) are built inside LossComputer.__init__ so every
+        # parameter is registered with the optimizer from step 0. No lazy
+        # first-forward construction.
+        token_dim = cfg.tokenizer.latent.token_dim
+        recon_target_dim = compute_raw_geo_stats_dim(cfg.tokenizer.geo_embed)
+        self.loss_computer = LossComputer(
+            self.tcfg.loss,
+            token_dim=token_dim,
+            recon_target_dim=recon_target_dim,
+        ).to(self.device)
         self.loss_computer.set_grid_shape(cfg.tokenizer.latent.latent_shape)
-        self._init_recon_proj(cfg)
 
-        # Optimizer (must come after recon_proj is built)
+        # Optimizer (sees both model and loss_computer params)
         self.optimizer = self._build_optimizer()
         self.scheduler = self._build_scheduler()
 
@@ -87,13 +95,16 @@ class Trainer:
         # autocast device type
         self._amp_device_type = "cuda" if self.use_cuda else "cpu"
 
-        # Logging
+        # Logging — env vars override the YAML/config value so that a single
+        # training invocation can be redirected to a different disk without
+        # editing config files.
+        log_dir_str = os.environ.get("SHAPE_LOG_DIR", self.tcfg.log_dir)
+        self.log_dir = Path(log_dir_str)
         self.writer = None
         self.wandb_run = None
         if self.is_main:
-            log_dir = Path(self.tcfg.log_dir)
-            log_dir.mkdir(parents=True, exist_ok=True)
-            self.writer = SummaryWriter(log_dir=str(log_dir))
+            self.log_dir.mkdir(parents=True, exist_ok=True)
+            self.writer = SummaryWriter(log_dir=str(self.log_dir))
 
             # Weights & Biases
             if self.tcfg.wandb.enabled:
@@ -113,8 +124,9 @@ class Trainer:
                 except Exception as e:
                     print(f"Warning: wandb init failed: {e}")
 
-        # Checkpointing
-        self.ckpt_dir = Path(self.tcfg.checkpoint_dir)
+        # Checkpointing — env var override mirrors SHAPE_LOG_DIR semantics.
+        ckpt_dir_str = os.environ.get("SHAPE_CHECKPOINT_DIR", self.tcfg.checkpoint_dir)
+        self.ckpt_dir = Path(ckpt_dir_str)
         self.ckpt_dir.mkdir(parents=True, exist_ok=True)
         self.global_step = 0
         self.start_epoch = 0
@@ -127,25 +139,12 @@ class Trainer:
             n_train = self.raw_model.get_num_trainable_params()
             print(f"Model: {n_params:,} params ({n_train:,} trainable)")
             print(f"Device: {self.device}  AMP: {self.tcfg.mixed_precision}  DDP: {dist.is_initialized()}")
+            reg = self.tcfg.loss.regression
+            print(f"Regression loss: {reg.kind}" + (f" (beta={reg.beta})" if reg.kind == "smooth_l1" else ""))
             if self.use_cuda:
                 for i in range(torch.cuda.device_count()):
                     mem = torch.cuda.get_device_properties(i).total_memory / 1e9
                     print(f"  GPU {i}: {torch.cuda.get_device_name(i)} ({mem:.0f} GB)")
-
-    def _init_recon_proj(self, cfg: ShapeConfig) -> None:
-        """Eagerly build the reconstruction projection so its params are
-        available to the optimizer. Must be called before _build_optimizer."""
-        if cfg.train.loss.masked_token.enabled or cfg.train.loss.inpainting.enabled:
-            token_dim = cfg.tokenizer.latent.token_dim
-            # Compute raw_geo_stats dim from config
-            geo = cfg.tokenizer.geo_embed
-            n_stats = len(geo.stat_features)
-            target_dim = n_stats * 3  # base: relative positions are 3D
-            if geo.augment_normals:
-                target_dim += n_stats * 3
-            if geo.augment_curvature:
-                target_dim += n_stats * 1
-            self.loss_computer._ensure_recon_proj(token_dim, target_dim, self.device)
 
     def _setup_device(self) -> torch.device:
         if torch.cuda.is_available():
@@ -251,6 +250,24 @@ class Trainer:
                 prefetch_factor=2 if self.tcfg.num_workers > 0 else None,
             )
 
+        # Loud-fail: if the config asked for validation but the val dataset
+        # is empty, refuse to start. Previously this silently skipped eval
+        # for the entire run, making overfit impossible to detect.
+        if self.cfg.data.val_fraction > 0.0 and val_loader is None:
+            raise RuntimeError(
+                f"cfg.data.val_fraction={self.cfg.data.val_fraction} but the val "
+                f"dataset is empty. Train samples: {len(train_dataset)}. "
+                "This usually means your sources produce too few files for the "
+                "hash-split threshold, or the source roots are wrong. Either "
+                "lower val_fraction, add more data, or set val_fraction=0.0 to "
+                "opt out of validation."
+            )
+        if self.is_main and val_loader is not None:
+            print(
+                f"Dataset split (val_fraction={self.cfg.data.val_fraction}): "
+                f"train={len(train_dataset):,}, val={len(val_dataset):,}"
+            )
+
         # update scheduler total steps
         steps_per_epoch = max(1, len(train_loader) // self.tcfg.gradient_accumulation_steps)
         total_steps = steps_per_epoch * self.tcfg.epochs
@@ -285,8 +302,12 @@ class Trainer:
             curvature = curvature.to(self.device, non_blocking=True)
 
         if augment and self.model.training:
+            # Augmentation strengths are read from contrastive config so
+            # that tuning them changes both the concat path and this
+            # legacy two-forward fallback identically.
+            aug = self.cfg.train.loss.contrastive
             # Jitter point positions
-            noise = torch.randn_like(points) * 0.005
+            noise = torch.randn_like(points) * aug.jitter_std
             points = points + noise
 
             # Keep features aligned with jittered points (first 3 dims are xyz)
@@ -294,8 +315,8 @@ class Trainer:
             if features.shape[-1] >= 3:
                 features[..., :3] = points
 
-            # Random point dropout (10%)
-            drop_mask = torch.rand(points.shape[:2], device=points.device) < 0.1
+            # Random point dropout
+            drop_mask = torch.rand(points.shape[:2], device=points.device) < aug.point_dropout
             keep = (~drop_mask).unsqueeze(-1).float()
             points = points * keep
             features = features * keep
@@ -326,13 +347,16 @@ class Trainer:
         if curvature_a is not None:
             curvature_a = curvature_a.to(self.device, non_blocking=True)
 
-        # View B: augmented (jitter + dropout, no mask)
-        noise = torch.randn_like(points_a) * 0.005
+        # View B: augmented (jitter + dropout, no mask). Strengths come
+        # from the contrastive config so raising them doesn't require a
+        # code change.
+        aug = self.cfg.train.loss.contrastive
+        noise = torch.randn_like(points_a) * aug.jitter_std
         points_b = points_a + noise
         features_b = features_a.clone()
         if features_b.shape[-1] >= 3:
             features_b[..., :3] = points_b
-        drop_mask = torch.rand(points_b.shape[:2], device=points_b.device) < 0.1
+        drop_mask = torch.rand(points_b.shape[:2], device=points_b.device) < aug.point_dropout
         keep = (~drop_mask).unsqueeze(-1).float()
         points_b = points_b * keep
         features_b = features_b * keep
@@ -407,13 +431,19 @@ class Trainer:
                 T = self.raw_model.encoder.num_tokens
                 token_mask = self.loss_computer.masked_token.create_mask(B, T, self.device)
 
-            # Single forward: if contrastive is enabled, concat masked view + augmented
-            # view into one batch to avoid two DDP forwards before one backward.
+            # Contrastive: by default concat masked + augmented views into a
+            # single DDP forward (safer under find_unused_parameters=True).
+            # Legacy two-forward path is still selectable via
+            # train.loss.contrastive.concat_forward = false for comparison.
             do_contrastive = self.cfg.train.loss.contrastive.enabled
+            use_concat = self.cfg.train.loss.contrastive.concat_forward
             out_aug = None
 
-            if do_contrastive:
+            if do_contrastive and use_concat:
                 out, out_aug = self._forward_concat(batch, token_mask)
+            elif do_contrastive:
+                out = self._forward_batch(batch, mask=token_mask)
+                out_aug = self._forward_batch(batch, augment=True, mask=None)
             else:
                 out = self._forward_batch(batch, mask=token_mask)
 
@@ -497,6 +527,11 @@ class Trainer:
             and self.loss_computer.masked_token is not None
         )
 
+        # Mirror training: if contrastive is enabled, use the concat forward
+        # so val sees both views and val/contrastive_raw gets logged.
+        do_contrastive = self.cfg.train.loss.contrastive.enabled
+        use_concat = self.cfg.train.loss.contrastive.concat_forward
+
         for batch in tqdm(val_loader, desc="Eval", disable=not self.is_main):
             B = batch["points"].shape[0]
 
@@ -506,7 +541,11 @@ class Trainer:
                 T = self.raw_model.encoder.num_tokens
                 token_mask = self.loss_computer.masked_token.create_mask(B, T, self.device)
 
-            out = self._forward_batch(batch, mask=token_mask)
+            out_aug = None
+            if do_contrastive and use_concat:
+                out, out_aug = self._forward_concat(batch, token_mask)
+            else:
+                out = self._forward_batch(batch, mask=token_mask)
 
             label_keys = [
                 "symmetry_label", "symmetry_planes", "symmetry_axes",
@@ -519,7 +558,7 @@ class Trainer:
                     batch_device[k] = batch[k].to(self.device, non_blocking=True)
 
             with torch.amp.autocast(self._amp_device_type, dtype=self.amp_dtype, enabled=self.amp_enabled):
-                losses = self.loss_computer(out, batch_device, token_mask=token_mask)
+                losses = self.loss_computer(out, batch_device, out_aug, token_mask=token_mask)
 
             for k, v in losses.items():
                 val = v.item() if isinstance(v, torch.Tensor) else v
@@ -536,6 +575,108 @@ class Trainer:
 
         return avg
 
+    @torch.no_grad()
+    def _calibrate_recon_target_stats(self, train_loader: DataLoader) -> None:
+        """Compute per-dim (mean, std) of raw_geo_stats on the training split.
+
+        Runs once at the start of training and writes the stats into the
+        `recon_target_mean` / `recon_target_std` buffers on LossComputer
+        so subsequent train / val / eval forward calls all use the same
+        normalization. Uses only the training dataloader — no val/test
+        data is touched — so validation statistics cannot leak into the
+        training targets.
+
+        DDP: all ranks run the calibration forward on their own local
+        shard, then sum/sumsq/count are all-reduced across the process
+        group so every rank ends up with identical global stats.
+
+        Skipped entirely if:
+        - recon_target_norm.enabled is False in config, OR
+        - LossComputer has no recon_proj (no reconstruction losses), OR
+        - buffers are already calibrated (e.g. from a resumed checkpoint).
+        """
+        lc = self.loss_computer
+        cfg_norm = self.tcfg.loss.recon_target_norm
+
+        if not cfg_norm.enabled:
+            if self.is_main:
+                print("Recon target normalization: disabled")
+            return
+        if lc.recon_proj is None:
+            if self.is_main:
+                print("Recon target normalization: skipped (no reconstruction losses)")
+            return
+        if lc.is_recon_target_calibrated():
+            if self.is_main:
+                m = lc.recon_target_mean
+                s = lc.recon_target_std
+                print(
+                    f"Recon target normalization: using calibrated buffers from checkpoint "
+                    f"(D={m.numel()}, mean∈[{m.min().item():+.3f}, {m.max().item():+.3f}], "
+                    f"std∈[{s.min().item():+.3e}, {s.max().item():+.3e}])"
+                )
+            return
+
+        n_batches = int(cfg_norm.n_calib_batches)
+        if n_batches <= 0:
+            if self.is_main:
+                print("Recon target normalization: n_calib_batches <= 0, skipping")
+            return
+
+        if self.is_main:
+            print(f"Calibrating recon target normalization on {n_batches} training batches...")
+
+        was_training = self.model.training
+        self.model.eval()
+
+        D = int(lc.recon_target_dim)
+        sum_ = torch.zeros(D, dtype=torch.float64, device=self.device)
+        sumsq = torch.zeros(D, dtype=torch.float64, device=self.device)
+        count = torch.zeros(1, dtype=torch.float64, device=self.device)
+
+        from itertools import islice
+        seen_raw_stats = False
+        for batch in islice(train_loader, n_batches):
+            out = self._forward_batch(batch, augment=False, mask=None)
+            if "raw_geo_stats" not in out:
+                break
+            seen_raw_stats = True
+            stats = out["raw_geo_stats"].reshape(-1, D).to(torch.float64)
+            sum_ += stats.sum(dim=0)
+            sumsq += (stats * stats).sum(dim=0)
+            count += stats.shape[0]
+
+        # DDP: pool across ranks so every rank gets the same global stats.
+        if dist.is_initialized():
+            dist.all_reduce(sum_, op=dist.ReduceOp.SUM)
+            dist.all_reduce(sumsq, op=dist.ReduceOp.SUM)
+            dist.all_reduce(count, op=dist.ReduceOp.SUM)
+
+        self.model.train(mode=was_training)
+
+        n = count.item()
+        if not seen_raw_stats or n < 2:
+            if self.is_main:
+                print(
+                    "Warning: calibration saw insufficient samples "
+                    f"(seen_raw_stats={seen_raw_stats}, n={n}); "
+                    "skipping normalization (targets will pass through)."
+                )
+            return
+
+        mean = (sum_ / n).to(torch.float32)
+        var = (sumsq / n - (sum_ / n) ** 2).clamp(min=0.0).to(torch.float32)
+        std = var.sqrt()
+
+        lc.set_recon_target_stats(mean, std)
+
+        if self.is_main:
+            print(
+                f"Recon target normalization calibrated (D={D}, n={int(n):,} tokens):\n"
+                f"  mean range: [{mean.min().item():+.4f}, {mean.max().item():+.4f}]\n"
+                f"  std  range: [{std.min().item():+.4e}, {std.max().item():+.4e}]"
+            )
+
     def train(self) -> None:
         """Full training loop."""
         train_loader, val_loader = self.build_dataloaders()
@@ -545,16 +686,34 @@ class Trainer:
             if dist.is_initialized():
                 print(f"DDP: {dist.get_world_size()} processes")
 
+        # Calibrate per-dim reconstruction-target normalization stats from
+        # training data only. Runs once before epoch 0 unless a resumed
+        # checkpoint already provided calibrated buffers.
+        self._calibrate_recon_target_stats(train_loader)
+
         for epoch in range(self.start_epoch, self.tcfg.epochs):
             train_metrics = self.train_epoch(train_loader, epoch)
 
             if self.is_main:
-                print(f"Epoch {epoch}: " + ", ".join(f"{k}={v:.4f}" for k, v in train_metrics.items()))
+                print(f"Epoch {epoch} " + ", ".join(
+                    f"train_epoch/{k}={v:.4f}" for k, v in sorted(train_metrics.items())
+                ))
+                if self.writer:
+                    for k, v in train_metrics.items():
+                        self.writer.add_scalar(f"train_epoch/{k}", v, epoch)
+                if self.wandb_run is not None:
+                    import wandb
+                    wandb.log(
+                        {f"train_epoch/{k}": v for k, v in train_metrics.items()},
+                        step=self.global_step,
+                    )
 
             if val_loader is not None and (epoch + 1) % max(1, self.tcfg.eval_every // max(1, len(train_loader))) == 0:
                 val_metrics = self.evaluate(val_loader)
                 if self.is_main:
-                    print(f"  Val: " + ", ".join(f"{k}={v:.4f}" for k, v in val_metrics.items()))
+                    print(f"Epoch {epoch} " + ", ".join(
+                        f"val/{k}={v:.4f}" for k, v in sorted(val_metrics.items())
+                    ))
 
         # Final save
         if self.is_main:
@@ -566,9 +725,19 @@ class Trainer:
                 wandb.finish()
 
     def _save_checkpoint(self, epoch: int, final: bool = False) -> None:
+        """Rank-0 atomic checkpoint save.
+
+        Writes the payload to a sibling `<name>.tmp` file, fsyncs, then
+        os.replace()s it onto the final path. If torch.save raises (e.g.
+        disk full), the partial .tmp is removed and the previous final
+        checkpoint is left untouched. os.replace is atomic within a single
+        filesystem, which is guaranteed because the temp file lives in the
+        same directory as the target.
+        """
         tag = "final" if final else f"step_{self.global_step}"
         path = self.ckpt_dir / f"checkpoint_{tag}.pt"
-        torch.save({
+        tmp_path = path.with_name(path.name + ".tmp")
+        payload = {
             "epoch": epoch,
             "global_step": self.global_step,
             "model_state_dict": self.raw_model.state_dict(),
@@ -576,7 +745,22 @@ class Trainer:
             "optimizer_state_dict": self.optimizer.state_dict(),
             "scheduler_state_dict": self.scheduler.state_dict(),
             "config": self.cfg,
-        }, path)
+        }
+        try:
+            with open(tmp_path, "wb") as f:
+                torch.save(payload, f)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(tmp_path, path)
+        except Exception as e:
+            if tmp_path.exists():
+                try:
+                    tmp_path.unlink()
+                except OSError:
+                    pass
+            if self.is_main:
+                print(f"ERROR: checkpoint save failed at {path}: {e}")
+            raise
         if self.is_main:
             print(f"Saved checkpoint: {path}")
 

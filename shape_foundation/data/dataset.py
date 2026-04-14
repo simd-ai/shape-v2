@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -24,6 +25,10 @@ class MeshDataset(Dataset):
     ready for the backbone.
     """
 
+    # Hash-split bucket count. 10_000 buckets give 0.01% granularity on
+    # val_fraction and uniform distribution across thousands of files.
+    _HASH_SPLIT_BUCKETS = 10_000
+
     def __init__(
         self,
         cfg: DataConfig,
@@ -38,13 +43,54 @@ class MeshDataset(Dataset):
         self.preprocessor = MeshPreprocessor(input_cfg)
         self.sampler = SurfaceSampler(input_cfg)
 
+        use_hash_split = (
+            cfg.val_fraction > 0.0
+            and split in ("train", "val")
+        )
+
         # Collect all file paths from configured sources
         self.samples: list[dict[str, Any]] = []
         for source_cfg in cfg.sources:
-            if source_cfg.split != split and source_cfg.split != "all":
-                continue
+            # Legacy per-source split field is honored only when hash-split
+            # is disabled. When hash-split is active, every source contributes
+            # to both train and val via the deterministic path-hash bucket.
+            if not use_hash_split:
+                if source_cfg.split != split and source_cfg.split != "all":
+                    continue
             source_samples = self._discover_source(source_cfg)
             self.samples.extend(source_samples)
+
+        if use_hash_split:
+            self.samples = self._apply_hash_split(
+                self.samples, cfg.val_fraction, split,
+            )
+
+    @classmethod
+    def _apply_hash_split(
+        cls,
+        samples: list[dict[str, Any]],
+        val_fraction: float,
+        split: str,
+    ) -> list[dict[str, Any]]:
+        """Deterministic train/val split by md5 hash of the sample path.
+
+        Each sample is placed in exactly one split based on a stable hash
+        of its path, so a given file always lands in the same split across
+        runs, ranks, and machines — no RNG seed required. Python's builtin
+        `hash()` is salted per process (PYTHONHASHSEED), which is why we
+        use hashlib.md5 here instead.
+        """
+        threshold = int(round(val_fraction * cls._HASH_SPLIT_BUCKETS))
+        threshold = max(1, min(cls._HASH_SPLIT_BUCKETS - 1, threshold))
+        want_val = split == "val"
+        kept: list[dict[str, Any]] = []
+        for s in samples:
+            h = hashlib.md5(s["path"].encode("utf-8")).digest()
+            bucket = int.from_bytes(h[:8], byteorder="big", signed=False) % cls._HASH_SPLIT_BUCKETS
+            in_val = bucket < threshold
+            if in_val == want_val:
+                kept.append(s)
+        return kept
 
     def _discover_source(self, src: DatasetSourceConfig) -> list[dict[str, Any]]:
         """Find mesh files for a dataset source."""

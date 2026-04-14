@@ -1,0 +1,18 @@
+{
+  "checkpoint": "/home/nvidia/inference/backend/data/checkpoint_final.pt",
+  "metrics": {
+    "contrastive_alignment": 0.1314970999956131,
+    "contrastive_infonce": 0.14548491686582565,
+    "contrastive_top1_acc": 0.98095703125,
+    "contrastive_uniformity": -3.83686900138855,
+    "embedding_norm_mean": 1.3297706842422485,
+    "embedding_norm_std": 0.2868654727935791,
+    "pairwise_cosine_mean": 0.001777352881617844,
+    "pairwise_cosine_std": 0.13934186100959778,
+    "recon_mse": 0.32638167138019636,
+    "recon_r2": 0.7288511568836906,
+    "recon_smoothl1": 0.02416639892287341
+  },
+  "split": "val",
+  "timestamp": "2026-04-14T14:51:10"
+}

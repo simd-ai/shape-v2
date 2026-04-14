@@ -1,0 +1,2 @@
+timestamp,checkpoint,split,recon_smoothl1,recon_mse,recon_r2,contrastive_alignment,contrastive_uniformity,contrastive_infonce,contrastive_top1_acc,embedding_norm_mean,embedding_norm_std,pairwise_cosine_mean,pairwise_cosine_std
+2026-04-14T14:51:10,checkpoint_final.pt,val,0.02416639892287341,0.32638167138019636,0.7288511568836906,0.1314970999956131,-3.83686900138855,0.14548491686582565,0.98095703125,1.3297706842422485,0.2868654727935791,0.001777352881617844,0.13934186100959778
