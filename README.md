@@ -1,366 +1,173 @@
 # Shape Foundation Model
 
-3D geometry foundation model for simulation-relevant mesh analysis. Given a mesh of a physical domain, the model produces geometry embeddings, detects symmetry/primitives/topology, and recommends simulation reductions (mirror symmetry, axisymmetry, cyclic sectors, extrusions).
+A 3D geometry foundation model for industrial CAD analysis. Takes a mesh of a physical domain and produces dense geometric embeddings with a self-supervised reconstruction prior that enables per-token attribution for explainable predictions.
+
+## Current Release
+
+**Small v3** — self-supervised backbone, trained and validated.
+
+| | |
+|---|---|
+| Parameters | 10,913,297 |
+| Training data | 61,052 CAD meshes |
+| Datasets | Fusion360 (58.4%), MFCAD (25.4%), Thingi10K (16.2%) |
+| Train / val split | 58,069 / 2,983 (deterministic hash-based) |
+| Compute | 8 × H100 80GB, 50 epochs, ~2h 30min |
+| Val reconstruction loss | 0.030 (matches train within 1%) |
+| Precision | bf16 + DDP + torch.compile |
+| Model hub | [`simd-ai/shape-foundation-small-v3`](https://huggingface.co/simd-ai/shape-foundation-small-v3) |
+
+The self-supervised backbone generalizes to unseen meshes. Supervised task heads (symmetry, primitive, part, reduction) are present in the architecture but their weights are currently `0.0` — the stock synthetic labels do not generalize and would overfit the model. See [Known Limitations](#known-limitations) below.
 
 ## Architecture
 
-**GAOTBackbone** = MAGNO Encoder + Transformer Processor + Task Heads
+**GAOTBackbone** = MAGNO Encoder → Transformer Processor → Task Heads
 
-- **MAGNO Encoder**: Multi-scale cross-attention from a structured 3D latent grid to physical surface points, with explicit geometric embeddings (statistical neighborhood features) and AGNO (cosine-similarity) attention.
-- **Transformer Processor**: 3D patchification → grouped-query attention with RMSNorm → unpatchification. Supports absolute and RoPE positional embeddings, optional UViT skip connections.
-- **Task Heads**: Geometry embedding, symmetry detection (classification + plane/axis regression), primitive recognition (per-token), part segmentation, template captioning, topology-reduction recommendation.
+- **MAGNO Encoder** — cross-attends from a structured 3D latent grid (24³ = 13,824 tokens) to 8,192 sampled surface points using cosine-similarity attention with learned temperature. Each token encodes local geometric statistics (mean / std / min / max of relative positions, normals, curvature) in a 28-dim signature.
 
-## Quick Start
+- **Transformer Processor** — 3D patchification (patch_size=6), grouped-query attention with RMSNorm, optional RoPE positional embeddings, unpatchification back to dense token embeddings.
 
-### Option A: From Preprocessed Data (Recommended)
+- **Task Heads** — geometry embedding (global pooled), reconstruction projection (for pretraining), plus symmetry, primitive, part, caption, and topology-reduction heads (currently disabled pending label rework).
 
-If someone has already preprocessed the data and uploaded to GCS, skip straight to training:
+### Pretraining objectives
+
+Self-supervised only — no labels required.
+
+1. **Masked Token Reconstruction** (weight 1.0) — 50% of latent tokens are masked; the model predicts their geometry statistics from surrounding context. Analogous to masked-language-modeling in LLMs but in 3D latent space. SmoothL1 loss (β=1.0) in normalized target space.
+
+2. **Multi-resolution Contrastive Consistency** (weight 0.2) — the same mesh under two augmentations (position jitter σ=0.02, 30% point dropout) must embed similarly. InfoNCE with temperature 0.07.
+
+### Key engineering decisions
+
+- **SmoothL1 regression** instead of MSE — curvature-dim outliers had std up to 711; MSE was dominated by a handful of extreme values. SmoothL1's linear regime above β=1 makes the loss outlier-robust.
+- **Per-dimension target normalization** — `raw_geo_stats` has 28 dimensions with std spanning `[0.036, 711]`. Per-dim mean and std are calibrated once on the training split at startup, stored as registered buffers, and used to normalize reconstruction targets to unit variance.
+- **Deterministic hash-based train/val split** — each file's split assignment is `md5(path) mod 10000 < val_fraction × 10000`. Identical across runs, ranks, and machines.
+- **Atomic checkpoint saves** — writes to `<path>.tmp`, fsyncs, then `os.replace` to the final name. A failed save never leaves a corrupt checkpoint.
+
+## Installation
 
 ```bash
-# 1. Install
+# System dependencies
+sudo apt-get install -y aria2 p7zip-full libxcursor1 libxinerama1 libxft2 libxmu6 libxi6 libglu1-mesa libgl1
+
+# Python dependencies — install torch first, PyG builds against it
 pip install torch --index-url https://download.pytorch.org/whl/cu124
 pip install torch-geometric torch-cluster torch-scatter -f https://data.pyg.org/whl/torch-2.6.0+cu124.html
 pip install -e .
+```
 
-# 2. Pull preprocessed .pt files from GCS
+Requires Python ≥3.10, CUDA 12.4+, PyTorch ≥2.6.
+
+## Quick Start
+
+The fastest path — download the preprocessed dataset and pretrained checkpoint, then train or evaluate.
+
+```bash
+# 1. Download preprocessed dataset from GCS (~33 GB)
 gcloud auth login
-gcloud config set project YOUR_PROJECT_ID
-gsutil -m rsync -r gs://shape-foundation-data/data_cache/ data_cache/
+gcloud storage cp -r gs://<YOUR_BUCKET>/shape-v2/data_cache/ data_cache/
+
+# 2. Download the small v3 checkpoint from HuggingFace
+hf download simd-ai/shape-foundation-small-v3 --local-dir checkpoints/
+
+# 3. Train (or resume from the downloaded checkpoint)
+torchrun --nproc_per_node=8 -m shape_foundation.scripts.train_pretrain --config configs/small.yaml
+```
+
+## Training from Scratch
+
+If you want to preprocess the raw meshes yourself:
+
+```bash
+# 1. Download raw meshes
+./scripts/download_datasets.sh small
+
+# Fusion360 segmentation subset (manual step)
+aria2c -x 16 -s 16 -d data_raw/fusion360 -o s2.0.1.zip \
+  "https://fusion-360-gallery-dataset.s3.us-west-2.amazonaws.com/segmentation/s2.0.1/s2.0.1.zip"
+unzip -q -o data_raw/fusion360/s2.0.1.zip -d data_raw/fusion360
+
+# 2. Preprocess each source into .pt files (parallelized, resumable)
+python -m shape_foundation.scripts.prepare_dataset --source thingi10k --root data_raw/thingi10k --output data_cache/thingi10k
+python -m shape_foundation.scripts.prepare_dataset --source mfcad    --root data_raw/mfcad    --output data_cache/mfcad
+python -m shape_foundation.scripts.prepare_dataset --source fusion360 --root data_raw/fusion360 --output data_cache/fusion360
 
 # 3. Train
 torchrun --nproc_per_node=8 -m shape_foundation.scripts.train_pretrain --config configs/small.yaml
 ```
 
-### Option B: From Scratch
-
-Full pipeline: download raw meshes → preprocess → train.
-
-#### Step 1: Install
-
-```bash
-# System dependencies (needed for STEP file processing via gmsh)
-sudo apt-get install -y aria2 p7zip-full libxcursor1 libxinerama1 libxft2 libxmu6 libxi6 libglu1-mesa libgl1
-
-# Python dependencies (install torch first — PyG extensions build against it)
-pip install torch --index-url https://download.pytorch.org/whl/cu124
-pip install torch-geometric torch-cluster torch-scatter -f https://data.pyg.org/whl/torch-2.6.0+cu124.html
-pip install -e .
-```
-
-#### Step 2: Download Datasets
-
-```bash
-# Choose a tier:
-#   small  = thingi10k, mfcad, fusion360           (~68 GB raw, ~15 GB preprocessed)
-#   medium = + objaverse, partnet                   (~50-60 GB preprocessed)
-#   large  = + abc, objaverse_xl                    (~500 GB+ preprocessed)
-./scripts/download_datasets.sh small
-
-# Check what's downloaded
-./scripts/check_datasets.sh
-```
-
-Fusion360 segmentation subset needs a separate download (not automated):
-```bash
-aria2c -x 16 -s 16 -d data_raw/fusion360 -o s2.0.1.zip \
-  "https://fusion-360-gallery-dataset.s3.us-west-2.amazonaws.com/segmentation/s2.0.1/s2.0.1.zip"
-unzip -q -o data_raw/fusion360/s2.0.1.zip -d data_raw/fusion360
-```
-
-#### Step 3: Preprocess into .pt Files
-
-Each raw mesh is converted to a self-contained `.pt` file with surface points, normals, features, and curvature. Preprocessing is parallelized across CPU cores and resumable (safe to cancel and rerun).
-
-```bash
-# Auto-parallelized (uses 75% of CPU cores by default)
-python -m shape_foundation.scripts.prepare_dataset --source thingi10k --root data_raw/thingi10k --output data_cache/thingi10k
-python -m shape_foundation.scripts.prepare_dataset --source mfcad --root data_raw/mfcad --output data_cache/mfcad
-python -m shape_foundation.scripts.prepare_dataset --source fusion360 --root data_raw/fusion360 --output data_cache/fusion360
-
-# Control parallelism manually
-python -m shape_foundation.scripts.prepare_dataset --source thingi10k --root data_raw/thingi10k --output data_cache/thingi10k --workers 64
-
-# Generate synthetic data (no download needed)
-python -m shape_foundation.scripts.prepare_dataset --generate-synthetic --n-per-type 500
-
-# Limit samples for quick testing
-python -m shape_foundation.scripts.prepare_dataset --source mfcad --root data_raw/mfcad --output data_cache/mfcad --max-samples 1000
-```
-
-Note: STEP files (MFCAD, Fusion360) are slower to preprocess than STL/OBJ (Thingi10K) because gmsh must tessellate CAD geometry.
-
-#### Step 4: Upload to GCS (for team sharing)
-
-```bash
-gcloud auth login
-gcloud config set project YOUR_PROJECT_ID
-
-# Create bucket (one-time)
-gsutil mb -l us-central1 gs://shape-foundation-data
-
-# Upload preprocessed data (resumable — safe to rerun if interrupted)
-gsutil -m rsync -r data_cache/thingi10k/ gs://shape-foundation-data/data_cache/thingi10k/
-gsutil -m rsync -r data_cache/mfcad/ gs://shape-foundation-data/data_cache/mfcad/
-gsutil -m rsync -r data_cache/fusion360/ gs://shape-foundation-data/data_cache/fusion360/
-
-# Upload checkpoints after training
-gsutil -m rsync -r checkpoints/ gs://shape-foundation-data/checkpoints/
-```
-
-No need to upload `data_raw/` — the `.pt` cache is all you need for training.
-
-#### Step 5: Train (Pretrain)
-
-## Step 4: Train (Pretrain)
-
-```bash
-# Smoke test (tiny model, verifies setup)
-python -m shape_foundation.scripts.train_pretrain --config configs/smoke_test.yaml
-
-# Single GPU — small config
-python -m shape_foundation.scripts.train_pretrain --config configs/small.yaml
-
-# Multi-GPU DDP — 8x V100
-torchrun --nproc_per_node=8 -m shape_foundation.scripts.train_pretrain --config configs/small.yaml
-
-# Multi-GPU DDP — medium config (recommended)
-torchrun --nproc_per_node=8 -m shape_foundation.scripts.train_pretrain --config configs/medium.yaml
-
-# Multi-GPU DDP — large config
-torchrun --nproc_per_node=8 -m shape_foundation.scripts.train_pretrain --config configs/large.yaml
-
-# Override specific settings
-python -m shape_foundation.scripts.train_pretrain --config configs/medium.yaml --epochs 50 --batch-size 64 --lr 1e-4
-```
-
-### Stage 2: Supervised Fine-tuning
-
-Add PartNet + Fusion360 + MFCAD++ + SHREC 2022/2023 for supervised heads.
-
-```bash
-python -m shape_foundation.scripts.train_finetune \
-    --config configs/medium.yaml \
-    --pretrained checkpoints/checkpoint_final.pt \
-    --freeze-backbone-epochs 5
-
-# Multi-GPU
-torchrun --nproc_per_node=4 -m shape_foundation.scripts.train_finetune \
-    --config configs/large.yaml \
-    --pretrained checkpoints/checkpoint_final.pt
-```
-
-### Stage 3: Symmetry/Reduction Fine-tuning
-
-Fine-tune on SHREC 2023, Scan2CAD, and synthetic reduction labels.
-
-```bash
-# Generate synthetic labels with perturbations
-python -m shape_foundation.scripts.prepare_dataset --generate-synthetic --n-per-type 1000
-
-python -m shape_foundation.scripts.train_finetune \
-    --pretrained checkpoints_finetune/checkpoint_final.pt \
-    --lr 1e-5 --epochs 20
-```
+Preprocessing takes roughly 1 hour on a 32-core machine for the small tier. STEP files (MFCAD, Fusion360) are slower than STL/OBJ because gmsh has to tessellate the CAD geometry.
 
 ## Evaluation
 
 ```bash
-# Full evaluation suite
 python -m shape_foundation.scripts.eval_backbone \
-    --checkpoint checkpoints/checkpoint_final.pt \
-    --config configs/medium.yaml \
-    --output eval_results.json
-
-# With robustness tests (noise + decimation)
-python -m shape_foundation.scripts.eval_backbone \
-    --checkpoint checkpoints/checkpoint_final.pt \
-    --robustness
-
-# TensorBoard
-tensorboard --logdir runs/
+    --checkpoint checkpoints/checkpoint_final.pt
 ```
 
-### Metrics
-
-| Metric | Description |
-|--------|-------------|
-| `retrieval_recall@K` | Recall@K for embedding retrieval |
-| `mean_cosine_sim` | Cosine agreement across remeshings |
-| `symmetry_accuracy` | Symmetry type classification accuracy |
-| `symmetry_f1_macro` | Macro F1 across symmetry classes |
-| `symmetry_plane_angular_error_deg` | Angular error on predicted symmetry planes |
-| `primitive_accuracy` | Per-token primitive classification accuracy |
-| `part_mIoU` | Part segmentation mean IoU |
-| `reduction_accuracy` | Reduction recommendation accuracy |
-| `reduction_ece` | Expected calibration error |
-| `robustness_noise_*` | Cosine similarity under noise |
-| `robustness_decimate_*` | Cosine similarity under decimation |
+Loads the checkpoint, runs the evaluator on the validation split, and writes `checkpoint_final_eval_val.json` next to the checkpoint. Use `--split test` or `--robustness` to change behavior.
 
 ## Inference
 
 ```bash
 python -m shape_foundation.scripts.infer_mesh \
     --checkpoint checkpoints/checkpoint_final.pt \
-    --mesh path/to/mesh.stl \
-    --output result.json \
-    --verbose
+    --mesh path/to/mesh.stl
 ```
 
-Output schema:
-```json
-{
-  "description": "This is a 3D geometry with mirror symmetry...",
-  "symmetry": {
-    "type": "mirror_half",
-    "confidence": 0.95,
-    "planes": [[1.0, 0.0, 0.0, 0.0]],
-    "axes": []
-  },
-  "primitives": [
-    {"type": "plane", "ratio": 0.45},
-    {"type": "cylinder", "ratio": 0.30}
-  ],
-  "topology": {
-    "repeated_sectors": 0,
-    "constant_cross_section": false,
-    "thin_regions": false
-  },
-  "simulation_hints": {
-    "recommended_reduction": "mirror_half",
-    "reasoning": ["Mirror symmetry plane detected", "Symmetry type: mirror_half"],
-    "confidence": 0.92
-  }
-}
-```
+For an interactive 3D demo with masked-token reconstruction heatmaps and shape retrieval, see the separate [`inference/`](https://github.com/simd-ai/shape-backend-v2) repo (FastAPI backend + Next.js frontend).
 
-## Ablations
+## Configuration
 
-All ablation configs are in `configs/ablations/`. Run with the same train scripts:
+All configuration is dataclass-based in `shape_foundation/configs/default.py`. YAML files in `configs/` override the defaults via deep merge.
+
+| Config | Parameters | Latent Grid | Token Dim | Layers × Heads | Status |
+|---|---|---|---|---|---|
+| `small.yaml` | 10.9M | 24³ | 128 | 3 × 4 | Trained ✅ |
+| `medium.yaml` | ~150M | 48³ | 256 | 6 × 8 | Next |
+| `large.yaml` | ~600M | 48³ | 512 | 12 × 16 | Planned |
+
+### Tuning common parameters
+
+Edit the YAML or override on the command line:
 
 ```bash
-# Input modes: vertices_only vs surface_sampled_points vs hybrid
-python -m shape_foundation.scripts.train_pretrain --config configs/ablations/input_modes.yaml
-
-# Latent grid: structured vs adaptive
-python -m shape_foundation.scripts.train_pretrain --config configs/ablations/latent_grid.yaml
-
-# Positional embedding: absolute vs RoPE
-python -m shape_foundation.scripts.train_pretrain --config configs/ablations/positional.yaml
-
-# Patch sizes: 4, 6, 8 (override from CLI)
-python -m shape_foundation.scripts.train_pretrain --config configs/ablations/patch_sizes.yaml
-# Edit patch_sizes.yaml to change processor.patch_size
-
-# Transformer depth: 3, 6, 12
-python -m shape_foundation.scripts.train_pretrain --config configs/ablations/transformer_depth.yaml
-
-# Token dims: 128, 256, 512
-python -m shape_foundation.scripts.train_pretrain --config configs/ablations/token_dims.yaml
-
-# Loss combinations: masked-only, +contrastive, +inpainting
-python -m shape_foundation.scripts.train_pretrain --config configs/ablations/loss_combos.yaml
+python -m shape_foundation.scripts.train_pretrain --config configs/small.yaml --epochs 100 --batch-size 32 --lr 1e-4
 ```
 
-## Configs
+## Scaling Strategy
 
-| Config | Latent Grid | Token Dim | Layers | Heads | Patch | Use Case |
-|--------|-------------|-----------|--------|-------|-------|----------|
-| `smoke_test.yaml` | 8³ | 64 | 2 | 2 | 4 | Verify setup |
-| `small.yaml` | 24³ | 128 | 3 | 4 | 6 | Single GPU experiments |
-| `medium.yaml` | 48³ | 256 | 6 | 8 | 6 | **Recommended default** |
-| `large.yaml` | 48³ | 512 | 12 | 16 | 6 | Multi-GPU full training |
+All scaling is config-only — no architectural changes needed.
 
-## Cloud Storage (GCS)
+| Axis | Small (v1) | Medium (v2) | Large (v3) |
+|---|---|---|---|
+| Parameters | 10M | 300M | 1B |
+| Latent grid | 24³ | 48³ | 64³ |
+| Hidden dim | 128 | 256 | 512 |
+| Transformer layers | 3 | 6 | 12 |
+| Training meshes | 61k | 500k | 2M+ |
+| Data sources | Thingi10K + MFCAD + Fusion360 | + Objaverse + PartNet | + ABC + Objaverse-XL |
+| Mask ratio | 0.5 | 0.5 | 0.75 |
+| Compute budget | ~20 GPU-h | ~2,000 GPU-h | ~40,000 GPU-h |
 
-Only the preprocessed `.pt` files and checkpoints need to be shared — raw data is not needed.
-
-```bash
-# --- Upload (after preprocessing/training) ---
-gsutil -m rsync -r data_cache/thingi10k/ gs://shape-foundation-data/data_cache/thingi10k/
-gsutil -m rsync -r data_cache/mfcad/ gs://shape-foundation-data/data_cache/mfcad/
-gsutil -m rsync -r data_cache/fusion360/ gs://shape-foundation-data/data_cache/fusion360/
-gsutil -m rsync -r checkpoints/ gs://shape-foundation-data/checkpoints/
-
-# --- Download (on a new instance) ---
-gcloud auth login
-gcloud config set project YOUR_PROJECT_ID
-gsutil -m rsync -r gs://shape-foundation-data/data_cache/ data_cache/
-gsutil -m rsync -r gs://shape-foundation-data/checkpoints/ checkpoints/
-
-# Then train directly — no preprocessing needed
-pip install torch --index-url https://download.pytorch.org/whl/cu124
-pip install torch-geometric torch-cluster torch-scatter -f https://data.pyg.org/whl/torch-2.6.0+cu124.html
-pip install -e .
-torchrun --nproc_per_node=8 -m shape_foundation.scripts.train_pretrain --config configs/small.yaml
-```
-
-Notes:
-- `gsutil -m rsync` uses parallel transfers and only syncs new/changed files (resumable).
-- If upload gets interrupted, just rerun — it picks up where it left off.
-- Upload datasets one at a time if the full rsync times out.
+What stays constant: MAGNO cross-attention, grouped-query attention, self-supervised objective, per-dim target normalization, SmoothL1 regression.
 
 ## Datasets
 
-| Dataset | Files | Raw Size | Format | Source |
-|---------|-------|----------|--------|--------|
-| Thingi10K | 9,999 | 46 GB | STL/OBJ | [HuggingFace](https://huggingface.co/datasets/Thingi10K/Thingi10K) |
-| MFCAD++ | 30,976 | 2.5 GB | STEP | [GitHub](https://github.com/hducg/MFCAD) |
-| Fusion360 | 71,362 | 20 GB | STEP/BREP | [S3](https://fusion-360-gallery-dataset.s3.us-west-2.amazonaws.com/segmentation/s2.0.1/s2.0.1.zip) |
-| Objaverse | 100K+ | ~50 GB | GLB/OBJ | `objaverse` Python package |
-| PartNet | varies | varies | OBJ | Manual — requires Stanford access |
-| ABC | ~1M | ~1 TB | OBJ | [ABC Dataset](https://deep-geometry.github.io/abc-dataset/) |
-| Objaverse XL | 500K+ | ~200 GB | GLB/OBJ | `objaverse` Python package |
+| Dataset | Meshes | Format | Source |
+|---|---|---|---|
+| Thingi10K | 9,883 | STL / OBJ | [HuggingFace](https://huggingface.co/datasets/Thingi10K/Thingi10K) |
+| MFCAD++ | 15,488 | STEP | [GitHub](https://github.com/hducg/MFCAD) |
+| Fusion360 | 35,681 | STEP / BREP | [AWS S3](https://fusion-360-gallery-dataset.s3.us-west-2.amazonaws.com/segmentation/s2.0.1/s2.0.1.zip) |
 
-| Tier | Datasets | ~Preprocessed Size | Use Case |
-|------|----------|-------------------|----------|
-| **small** | Thingi10K, MFCAD++, Fusion360 | ~10-15 GB | Initial experiments |
-| **medium** | + Objaverse, PartNet | ~50-60 GB | Broader diversity |
-| **large** | + ABC, Objaverse XL | ~500 GB+ | Full-scale training |
+Check dataset status at any time with `./scripts/check_datasets.sh`.
 
-Check dataset status: `./scripts/check_datasets.sh`
+## Known Limitations
 
-## Project Structure
+**Supervised task heads are disabled.** The symmetry, primitive, part, and reduction heads are architecturally present but trained with weight `0.0`. Under previous runs with stock synthetic labels enabled, training cross-entropy collapsed to `~1e-4` while validation CE stayed at chance level (`~2.5`) — classic memorization of per-file label noise. Re-enabling these heads requires rewriting `shape_foundation/data/synthetic_labels.py` so the labels are recoverable from the sampled point cloud the model actually sees, not from full-mesh properties.
 
-```
-training/
-├── configs/                    # YAML configs
-│   ├── smoke_test.yaml
-│   ├── small.yaml
-│   ├── medium.yaml
-│   ├── large.yaml
-│   └── ablations/
-├── shape_foundation/
-│   ├── configs/                # Dataclass config definitions
-│   │   └── default.py
-│   ├── data/                   # Data pipeline
-│   │   ├── dataset.py          # MeshDataset, CollateFunction
-│   │   ├── preprocessing.py    # Canonicalization, normals, curvature
-│   │   ├── sampling.py         # Surface sampling strategies
-│   │   └── synthetic_labels.py # Symmetry/primitive label generation
-│   ├── preprocessing/
-│   │   └── mesh_io.py          # Mesh loading (STL/OBJ/PLY/MSH/STEP)
-│   ├── models/
-│   │   ├── gaot_backbone.py    # GAOTBackbone (main model)
-│   │   ├── tokenizer_magno.py  # MAGNO encoder (tokenizer)
-│   │   ├── processor_transformer.py  # Transformer processor
-│   │   └── heads.py            # All task heads
-│   ├── training/
-│   │   ├── losses.py           # All loss functions
-│   │   ├── trainer.py          # DDP training loop
-│   │   └── eval.py             # Evaluation suite
-│   ├── tasks/                  # High-level task modules
-│   │   ├── symmetry.py
-│   │   ├── primitives.py
-│   │   ├── captioning.py
-│   │   └── topology_reduction.py
-│   └── scripts/                # CLI entry points
-│       ├── prepare_dataset.py
-│       ├── train_pretrain.py
-│       ├── train_finetune.py
-│       ├── eval_backbone.py
-│       └── infer_mesh.py
-├── notebooks/
-├── pyproject.toml
-├── requirements.txt
-└── README.md
-```
+**Contrastive loss saturates early.** With per-rank batch size 16, InfoNCE has only 15 negatives per anchor, which makes the objective too easy after a few epochs. Cross-rank negative sampling (via `dist.all_gather` on pooled embeddings) is the natural fix when scaling up the batch size becomes too expensive.
+
+## License
+
+See `LICENSE`. Training data is used under the respective licenses of each upstream dataset.
