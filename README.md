@@ -219,10 +219,14 @@ Check dataset status at any time with `./scripts/check_datasets.sh`.
 
 ## Known Limitations
 
-**Supervised task heads are disabled.** The symmetry, primitive, part, and reduction heads are architecturally present but trained with weight `0.0`. Under previous runs with stock synthetic labels enabled, training cross-entropy collapsed to `~1e-4` while validation CE stayed at chance level (`~2.5`) — classic memorization of per-file label noise. Re-enabling these heads requires rewriting `shape_foundation/data/synthetic_labels.py` so the labels are recoverable from the sampled point cloud the model actually sees, not from full-mesh properties.
+**Supervised task heads are disabled in v3 (small).** The symmetry, primitive, part, and reduction heads are architecturally present but trained with weight `0.0`. Under previous runs with stock synthetic labels enabled, training cross-entropy collapsed to `~1e-4` while validation CE stayed at chance level (`~2.5`) — classic memorization of per-file label noise. Re-enabling these heads requires rewriting `shape_foundation/data/synthetic_labels.py` so the labels are recoverable from the sampled point cloud the model actually sees, not from full-mesh properties. **These heads will be activated in the medium and large releases** once the label generator is fixed and additional supervised datasets (PartNet, Scan2CAD) are integrated — the backbone's self-supervised quality ceiling is what's being validated at the small scale first.
 
-**Contrastive loss saturates early.** With per-rank batch size 16, InfoNCE has only 15 negatives per anchor, which makes the objective too easy after a few epochs. Cross-rank negative sampling (via `dist.all_gather` on pooled embeddings) is the natural fix when scaling up the batch size becomes too expensive.
+**Contrastive loss saturates early at small scale.** With per-rank batch size 16, InfoNCE has only 15 negatives per anchor, which makes the objective too easy after a few epochs. Cross-rank negative sampling (via `dist.all_gather` on pooled embeddings) is planned for the medium release, where larger effective batch sizes and cross-device negatives keep the contrastive objective non-trivial for the full training budget.
 
 ## License
 
-See `LICENSE`. Training data is used under the respective licenses of each upstream dataset.
+This library is licensed under the Apache 2.0 License. See the `LICENSE` file for more information.
+
+You must not use this library or our models in a manner that infringes, misappropriates, or otherwise violates any third party's rights, including intellectual property rights.
+
+Training data is used under the respective licenses of each upstream dataset (Thingi10K, MFCAD, Fusion360).
