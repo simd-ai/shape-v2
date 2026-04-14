@@ -171,7 +171,7 @@ python -m shape_foundation.scripts.infer_mesh \
     --mesh path/to/mesh.stl
 ```
 
-For an interactive 3D demo with masked-token reconstruction heatmaps and shape retrieval, see the separate [`inference/`](https://github.com/simd-ai/shape-backend-v2) repo (FastAPI backend + Next.js frontend).
+For an interactive 3D demo with masked-token reconstruction heatmaps and shape retrieval, visit **[shape.simd.space](https://shape.simd.space)**.
 
 ## Configuration
 
@@ -179,9 +179,9 @@ All configuration is dataclass-based in `shape_foundation/configs/default.py`. Y
 
 | Config | Parameters | Latent Grid | Token Dim | Layers × Heads | Status |
 |---|---|---|---|---|---|
-| `small.yaml` | 10.9M | 24³ | 128 | 3 × 4 | Trained ✅ |
-| `medium.yaml` | ~150M | 48³ | 256 | 6 × 8 | Next |
-| `large.yaml` | ~600M | 48³ | 512 | 12 × 16 | Planned |
+| `small.yaml` | 10M | 24³ | 128 | 3 × 4 | Trained ✅ |
+| `medium.yaml` | ~300M | 48³ | 256 | 6 × 8 | Next |
+| `large.yaml` | ~1B | 64³ | 512 | 12 × 16 | Planned |
 
 ### Tuning common parameters
 
