@@ -124,29 +124,13 @@ Requires Python ≥3.10, CUDA 12.4+, PyTorch ≥2.6.
 
 ## Quick Start
 
-The fastest path — download the preprocessed dataset and pretrained checkpoint, then train or evaluate.
+Reproduce the small v3 training run from scratch. Three steps: download the raw datasets, preprocess them into `.pt` files, then train.
 
 ```bash
-# 1. Download preprocessed dataset from GCS (~33 GB)
-gcloud auth login
-gcloud storage cp -r gs://<YOUR_BUCKET>/shape-v2/data_cache/ data_cache/
-
-# 2. Download the small v3 checkpoint from HuggingFace
-hf download bayang/shape-foundation-small-v3 --local-dir checkpoints/
-
-# 3. Train (or resume from the downloaded checkpoint)
-torchrun --nproc_per_node=8 -m shape_foundation.scripts.train_pretrain --config configs/small.yaml
-```
-
-## Training from Scratch
-
-If you want to preprocess the raw meshes yourself:
-
-```bash
-# 1. Download raw meshes
+# 1. Download raw meshes from their public sources (Thingi10K, MFCAD, Fusion360)
 ./scripts/download_datasets.sh small
 
-# Fusion360 segmentation subset (manual step)
+# Fusion360 segmentation subset (manual step — not automated by the script)
 aria2c -x 16 -s 16 -d data_raw/fusion360 -o s2.0.1.zip \
   "https://fusion-360-gallery-dataset.s3.us-west-2.amazonaws.com/segmentation/s2.0.1/s2.0.1.zip"
 unzip -q -o data_raw/fusion360/s2.0.1.zip -d data_raw/fusion360
@@ -156,11 +140,19 @@ python -m shape_foundation.scripts.prepare_dataset --source thingi10k --root dat
 python -m shape_foundation.scripts.prepare_dataset --source mfcad    --root data_raw/mfcad    --output data_cache/mfcad
 python -m shape_foundation.scripts.prepare_dataset --source fusion360 --root data_raw/fusion360 --output data_cache/fusion360
 
-# 3. Train
+# 3. Train on 8 GPUs (~2h 30min on 8 × H100 80GB)
 torchrun --nproc_per_node=8 -m shape_foundation.scripts.train_pretrain --config configs/small.yaml
 ```
 
-Preprocessing takes roughly 1 hour on a 32-core machine for the small tier. STEP files (MFCAD, Fusion360) are slower than STL/OBJ because gmsh has to tessellate the CAD geometry.
+Preprocessing takes roughly 1 hour on a 32-core machine for the small tier. STEP files (MFCAD, Fusion360) are slower than STL/OBJ because gmsh has to tessellate the CAD geometry before sampling surface points.
+
+Alternatively, you can skip training entirely and just download the pretrained weights from [HuggingFace](https://huggingface.co/bayang/shape-foundation-small-v3):
+
+```bash
+hf download bayang/shape-foundation-small-v3 --local-dir checkpoints/
+```
+
+then jump straight to Evaluation or Inference below.
 
 ## Evaluation
 
