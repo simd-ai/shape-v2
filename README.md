@@ -212,7 +212,6 @@ All scaling is config-only — no architectural changes needed.
 | Training meshes | 61k | 500k | 2M+ |
 | Data sources | Thingi10K + MFCAD + Fusion360 | + Objaverse + PartNet | + ABC + Objaverse-XL |
 | Mask ratio | 0.5 | 0.5 | 0.75 |
-| Compute budget | ~20 GPU-h | ~2,000 GPU-h | ~40,000 GPU-h |
 
 What stays constant: MAGNO cross-attention, grouped-query attention, self-supervised objective, per-dim target normalization, SmoothL1 regression.
 
