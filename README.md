@@ -103,10 +103,23 @@ Self-supervised only — no labels required.
 
 ### Key engineering decisions
 
-- **SmoothL1 regression** instead of MSE — curvature-dim outliers had std up to 711; MSE was dominated by a handful of extreme values. SmoothL1's linear regime above β=1 makes the loss outlier-robust.
-- **Per-dimension target normalization** — `raw_geo_stats` has 28 dimensions with std spanning `[0.036, 711]`. Per-dim mean and std are calibrated once on the training split at startup, stored as registered buffers, and used to normalize reconstruction targets to unit variance.
+- **Per-dimension target normalization is the decisive intervention** — `raw_geo_stats` has 28 dimensions with std spanning `[0.036, 711]` because mesh curvature is heavy-tailed on sharp CAD features. Without normalization, any symmetric regression loss (MSE or SmoothL1) is dominated by a handful of curvature dimensions and fails to train (`R² < 0.14`, top-1 retrieval `< 88%`, see ablation below). With per-dim z-scoring applied to targets — calibrated once on the training split at startup and stored as registered buffers — both MSE and SmoothL1 reach `R² > 0.70` and top-1 `> 96%`. Normalization alone closes the gap.
+- **SmoothL1 instead of MSE is a secondary stability choice** — once normalization is applied, MSE and SmoothL1 are statistically indistinguishable at 20 epochs (`R² = 0.778` vs `0.702`, top-1 `96.7%` vs `97.1%`). We retain SmoothL1 (β=1.0) as the default for its bounded-gradient property in the tail, which matters for long 50-epoch training runs under bf16 where the occasional numerical spike can destabilize MSE. It is a safety hedge for deployment, not a performance win.
 - **Deterministic hash-based train/val split** — each file's split assignment is `md5(path) mod 10000 < val_fraction × 10000`. Identical across runs, ranks, and machines.
 - **Atomic checkpoint saves** — writes to `<path>.tmp`, fsyncs, then `os.replace` to the final name. A failed save never leaves a corrupt checkpoint.
+
+### Ablation of training interventions
+
+A controlled 2×2 ablation across `{MSE, SmoothL1} × {raw targets, per-dim normalized targets}`, 20 epochs per variant, validates that normalization is the dominant effect:
+
+| Loss | Target norm | R² | Top-1 | Alignment | Uniformity |
+|---|---|---:|---:|---:|---:|
+| MSE | none | 0.133 | 76.1% | 0.366 | −3.37 |
+| SmoothL1 | none | 0.061 | 87.6% | 0.318 | −3.71 |
+| MSE | per-dim | **0.778** | 96.7% | 0.191 | −3.80 |
+| SmoothL1 (ours) | per-dim | 0.702 | **97.1%** | **0.180** | **−3.82** |
+
+R² is reported in the target space each variant was trained on (raw for no-normalization rows, z-scored per-dimension for normalized rows). Top-1, alignment, and uniformity are scale-free and directly comparable across all rows. See `results/ablations/` for the raw CSVs and plots.
 
 ## Installation
 

@@ -1,0 +1,80 @@
+# Ablation Run 4 — SmoothL1 + per-dim NORMALIZATION  (released model recipe)
+# This is the same configuration as small.yaml, rerun at 20 epochs for a
+# fair apples-to-apples comparison against the other three ablation runs.
+# Results should match (within noise) what we observed on the full 50-epoch
+# small v3 checkpoint.
+input:
+  num_surface_points: 4096
+
+tokenizer:
+  latent:
+    latent_shape: [24, 24, 24]
+    token_dim: 128
+  neighbor:
+    multiscale_radii: [0.05, 0.1, 0.2]
+  agno:
+    num_heads: 4
+
+processor:
+  hidden_size: 128
+  num_layers: 3
+  num_heads: 4
+  num_kv_heads: 2
+  patch_size: 6
+
+heads:
+  embedding_dim: 128
+  pooling: attention
+  symmetry:
+    hidden_dim: 128
+  primitive:
+    hidden_dim: 128
+  part:
+    hidden_dim: 128
+  caption:
+    hidden_dim: 128
+  reduction:
+    hidden_dim: 128
+
+train:
+  epochs: 20
+  batch_size: 16
+  gradient_accumulation_steps: 2
+  mixed_precision: bf16
+  num_workers: 4
+  pin_memory: true
+  checkpoint_dir: /data/shape-v2/ablations/run4_smoothl1_norm/checkpoints
+  log_dir: /data/shape-v2/ablations/run4_smoothl1_norm/runs
+  optimizer:
+    lr: 3.0e-4
+    warmup_steps: 500
+  loss:
+    inpainting:
+      enabled: false
+    regression:
+      kind: smooth_l1                                # ★ SmoothL1
+      beta: 1.0
+    recon_target_norm:
+      enabled: true                                  # ★ per-dim NORMALIZATION
+    weights:
+      masked_token: 1.0
+      contrastive: 0.2
+      inpainting: 0.0
+  wandb:
+    enabled: true
+    project: shape-foundation-ablations
+    name: run4_smoothl1_norm
+    tags: [ablation, small, smoothl1, norm, ours]
+
+data:
+  val_fraction: 0.05
+  sources:
+    - name: thingi10k
+      root: data_cache/thingi10k/thingi10k
+      weight: 1.0
+    - name: mfcad
+      root: data_cache/mfcad/mfcad
+      weight: 1.0
+    - name: fusion360
+      root: data_cache/fusion360/fusion360
+      weight: 0.5

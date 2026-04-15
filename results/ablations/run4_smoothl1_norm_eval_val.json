@@ -1,0 +1,18 @@
+{
+  "checkpoint": "/data/shape-v2/ablations/run4_smoothl1_norm/checkpoints/checkpoint_final.pt",
+  "metrics": {
+    "contrastive_alignment": 0.18040940165519714,
+    "contrastive_infonce": 0.22391927987337112,
+    "contrastive_top1_acc": 0.970703125,
+    "contrastive_uniformity": -3.817469835281372,
+    "embedding_norm_mean": 1.551815390586853,
+    "embedding_norm_std": 0.3217058479785919,
+    "pairwise_cosine_mean": -0.0016298902919515967,
+    "pairwise_cosine_std": 0.14373843371868134,
+    "recon_mse": 0.35941918697258085,
+    "recon_r2": 0.7015652006976485,
+    "recon_smoothl1": 0.036996859432147026
+  },
+  "split": "val",
+  "timestamp": "2026-04-15T12:29:56"
+}
