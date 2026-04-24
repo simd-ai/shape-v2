@@ -1,4 +1,4 @@
-# Shape Foundation Model
+# Shape Foundation Model 
 
 A 3D geometry foundation model for industrial CAD analysis. Takes a mesh of a physical domain and produces dense geometric embeddings with a self-supervised reconstruction prior that enables per-token attribution for explainable predictions.
 
